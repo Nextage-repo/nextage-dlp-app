@@ -24,7 +24,17 @@
       "Bash(python3 scripts/build-docx.py)",
       "Bash(extract-text Nextage_DLP_Azure_Deployment.docx)",
       "Bash(pandoc Nextage_DLP_Azure_Deployment.docx -t markdown)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(which terraform *)",
+      "Bash(terraform version *)",
+      "Bash(brew --version)",
+      "Bash(brew tap *)",
+      "Bash(brew install *)",
+      "Bash(terraform init *)",
+      "Bash(terraform validate *)",
+      "Bash(terraform output *)",
+      "Read(//private/tmp/**)",
+      "Bash(az account *)"
     ]
   }
 }
