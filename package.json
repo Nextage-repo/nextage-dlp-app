@@ -8,7 +8,7 @@
     "start": "webpack serve --mode development",
     "build": "webpack --mode production && npm run build:manifests",
     "build:dev": "webpack --mode development",
-    "build:manifests": "ts-node --transpile-only scripts/build-manifests.ts",
+    "build:manifests": "ts-node-esm --transpile-only scripts/build-manifests.ts",
     "watch": "webpack --mode development --watch",
     "lint": "eslint 'src/**/*.ts'",
     "test": "jest",
