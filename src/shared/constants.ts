@@ -15,7 +15,6 @@ export const INTERNAL_DOMAIN = "nextage.co.il";
 
 // API base — Azure Functions proxy URL. In dev, falls back to localhost:7071.
 export const API_BASE_URL =
-  // @ts-ignore — webpack DefinePlugin injects this at build time
   (typeof process !== "undefined" && process.env?.AZURE_FUNCTIONS_URL) ||
   "https://nextage-dlp-api.azurewebsites.net/api";
 
