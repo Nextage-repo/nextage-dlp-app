@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies
+      - name: Install all dependencies
         run: npm ci
 
       - name: Build
@@ -27,10 +27,12 @@ jobs:
       - name: Install production dependencies only
         run: npm ci --omit=dev
 
+      - name: Create deployment package
+        run: zip -r deploy.zip server.js package.json node_modules dist
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'Nextage-dlp-app'
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: .
-          clean: true
+          package: deploy.zip
