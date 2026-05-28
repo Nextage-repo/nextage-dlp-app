@@ -36,4 +36,3 @@ jobs:
           app-name: 'Nextage-dlp-app'
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: '.'
-          startup-command: 'node server.cjs'
