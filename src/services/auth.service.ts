@@ -15,22 +15,8 @@ export class AuthService {
   private tokenExpiresAt = 0;
 
   async getTokenSilent(): Promise<string> {
-    if (this.cachedToken && this.tokenExpiresAt - SAFETY_BUFFER_MS > Date.now()) {
-      return this.cachedToken;
-    }
-
-    try {
-      const token = await Office.auth.getAccessToken(AUTH_OPTIONS);
-      this.cachedToken = token;
-      this.tokenExpiresAt = parseExpiry(token) ?? Date.now() + DEFAULT_LIFETIME_MS;
-      return token;
-    } catch (err: unknown) {
-      const errorCode = (err as { code?: number })?.code;
-      // 13001 = user not signed in; 13002 = consent required;
-      // 13003 = unsupported user identity; 13007 = SSO not available
-      console.error("[Auth] SSO token failed, code:", errorCode, err);
-      throw new Error(`SSO token acquisition failed (code=${errorCode ?? "unknown"})`);
-    }
+    // SSO disabled — return empty token, app runs without authentication
+    return "no-auth";
   }
 
   clearCache(): void {
