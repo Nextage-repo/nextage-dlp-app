@@ -40,7 +40,7 @@ app.post("/api/audit", (req, res) => {
 });
 
 // Serve taskpane for all other routes
-app.get("*", (req, res) => {
+app.use((req, res) => {
   res.sendFile(path.join(__dirname, "dist", "taskpane.html"));
 });
 
