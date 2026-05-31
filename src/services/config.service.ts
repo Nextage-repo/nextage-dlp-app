@@ -52,15 +52,60 @@ export class ConfigService {
         );
       }
 
-      const config = (await response.json()) as DLPConfig;
+      const raw = await response.json();
 
-      // Defensive: ensure all expected fields are arrays
-      return {
-        customers: Array.isArray(config.customers) ? config.customers : [],
-        advisors: Array.isArray(config.advisors) ? config.advisors : [],
-        exemptions: Array.isArray(config.exemptions) ? config.exemptions : [],
-        exclusions: Array.isArray(config.exclusions) ? config.exclusions : [],
-      };
+      // Map PostgreSQL field names → DLPConfig model field names
+      const customers = Array.isArray(raw.customers)
+        ? raw.customers.map((c: any) => ({
+            id: String(c.id),
+            partitionKey: "customers" as const,
+            customerName: c.name,
+            aliases: Array.isArray(c.aliases) ? c.aliases : [],
+            primaryDomain: c.primary_domain || (Array.isArray(c.domains) && c.domains[0]) || "",
+            additionalDomains: Array.isArray(c.domains) ? c.domains : [],
+            status: "ACTIVE" as const,
+            updatedAt: new Date().toISOString(),
+          }))
+        : [];
+
+      const advisors = Array.isArray(raw.advisors)
+        ? raw.advisors.map((a: any) => ({
+            id: String(a.id),
+            partitionKey: "advisors" as const,
+            advisorName: a.name,
+            emailDomain: a.email?.split("@")[1] || "",
+            linkedCustomers: [],
+            status: "ACTIVE" as const,
+            updatedAt: new Date().toISOString(),
+          }))
+        : [];
+
+      const exemptions = Array.isArray(raw.exemptions)
+        ? raw.exemptions.map((e: any) => ({
+            id: String(e.id),
+            partitionKey: "exemptions" as const,
+            userEmail: e.email,
+            fullName: e.reason || "",
+            exemptionType: "ALL_CHECKS" as const,
+            scope: "ALL",
+            expiryDate: null,
+          }))
+        : [];
+
+      const exclusions = Array.isArray(raw.exclusions)
+        ? raw.exclusions.map((ex: any) => ({
+            id: String(ex.id),
+            partitionKey: "exclusions" as const,
+            emailAddress: null,
+            domainPattern: null,
+            allowUnencrypted: true,
+            reason: ex.reason || ex.extension,
+            expiryDate: null,
+            extension: ex.extension,
+          }))
+        : [];
+
+      return { customers, advisors, exemptions, exclusions };
     } finally {
       clearTimeout(timeoutId);
     }
