@@ -101,6 +101,36 @@ app.post("/api/audit", async (req, res) => {
   }
 });
 
+// Temporary seed endpoint — remove after first use
+app.post("/api/seed", async (req, res) => {
+  try {
+    await pool.query(`
+      INSERT INTO customers (name, domains) VALUES
+        ('Leumi Bank', ARRAY['leumi.co.il', 'bankleumi.co.il']),
+        ('Hapoalim Bank', ARRAY['bankhapoalim.co.il']),
+        ('Example Corp', ARRAY['example.com'])
+      ON CONFLICT DO NOTHING;
+
+      INSERT INTO advisors (email, name) VALUES
+        ('mor.mordechay@nextage.co.il', 'מור מרדכי')
+      ON CONFLICT DO NOTHING;
+
+      INSERT INTO exemptions (email, reason) VALUES
+        ('mor.mordechay@nextage.co.il', 'מנהל מערכת')
+      ON CONFLICT DO NOTHING;
+
+      INSERT INTO exclusions (extension, reason) VALUES
+        ('pdf', 'PDF מוגן בעצמו'),
+        ('txt', 'קובץ טקסט לא רגיש')
+      ON CONFLICT DO NOTHING;
+    `);
+    res.json({ ok: true, message: "Database seeded successfully!" });
+  } catch (err) {
+    console.error("[Seed] error:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Serve taskpane for all other routes
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, "dist", "taskpane.html"));
