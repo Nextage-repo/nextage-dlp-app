@@ -21,8 +21,12 @@ async function initDB() {
       CREATE TABLE IF NOT EXISTS customers (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
+        primary_domain TEXT,
+        aliases TEXT[] NOT NULL DEFAULT '{}',
         domains TEXT[] NOT NULL DEFAULT '{}'
       );
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS primary_domain TEXT;
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS aliases TEXT[] NOT NULL DEFAULT '{}';
       CREATE TABLE IF NOT EXISTS advisors (
         id SERIAL PRIMARY KEY,
         email TEXT NOT NULL,
@@ -80,18 +84,18 @@ app.get("/api/admin/customers", adminAuth, async (req, res) => {
   res.json(r.rows);
 });
 app.post("/api/admin/customers", adminAuth, async (req, res) => {
-  const { name, domains } = req.body;
+  const { name, primary_domain, aliases, domains } = req.body;
   const r = await pool.query(
-    "INSERT INTO customers (name, domains) VALUES ($1, $2) RETURNING *",
-    [name, domains]
+    "INSERT INTO customers (name, primary_domain, aliases, domains) VALUES ($1, $2, $3, $4) RETURNING *",
+    [name, primary_domain, aliases, domains]
   );
   res.json(r.rows[0]);
 });
 app.put("/api/admin/customers/:id", adminAuth, async (req, res) => {
-  const { name, domains } = req.body;
+  const { name, primary_domain, aliases, domains } = req.body;
   const r = await pool.query(
-    "UPDATE customers SET name=$1, domains=$2 WHERE id=$3 RETURNING *",
-    [name, domains, req.params.id]
+    "UPDATE customers SET name=$1, primary_domain=$2, aliases=$3, domains=$4 WHERE id=$5 RETURNING *",
+    [name, primary_domain, aliases, domains, req.params.id]
   );
   res.json(r.rows[0]);
 });
@@ -284,7 +288,7 @@ app.get("/admin", (req, res) => {
           <h2>לקוחות</h2>
           <button class="btn btn-success btn-sm" onclick="openModal('customers')">+ הוסף לקוח</button>
         </div>
-        <table><thead><tr><th>שם</th><th>דומיינים</th><th>פעולות</th></tr></thead>
+        <table><thead><tr><th>שם</th><th>דומיין ראשי</th><th>כינויים</th><th>דומיינים</th><th>פעולות</th></tr></thead>
         <tbody id="table-customers"></tbody></table>
       </div>
     </div>
@@ -391,7 +395,9 @@ async function loadTable(name) {
   if (name === "customers") {
     tbody.innerHTML = data.map(r => \`<tr>
       <td><strong>\${r.name}</strong></td>
-      <td>\${(r.domains||[]).map(d=>\`<span class="tag">\${d}</span>\`).join("")}</td>
+      <td>\${r.primary_domain ? \`<span class="tag tag-green">\${r.primary_domain}</span>\` : '<span style="color:#aaa">—</span>'}</td>
+      <td>\${(r.aliases||[]).map(a=>\`<span class="tag tag-gray">\${a}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
+      <td>\${(r.domains||[]).map(d=>\`<span class="tag">\${d}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick='editRow("customers",\${JSON.stringify(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("customers",\${r.id})'>🗑️</button>
@@ -448,9 +454,15 @@ function buildForm(table, row) {
   if (table === "customers") return \`
     <div class="form-group"><label>שם לקוח</label>
       <input id="f-name" value="\${row?.name||""}" placeholder="בנק לאומי"/></div>
-    <div class="form-group"><label>דומיינים</label>
+    <div class="form-group"><label>דומיין ראשי</label>
+      <input id="f-primary-domain" value="\${row?.primary_domain||""}" placeholder="leumi.co.il"/>
+      <small>הדומיין הרשמי העיקרי של הלקוח</small></div>
+    <div class="form-group"><label>כינויים (Aliases)</label>
+      <input id="f-aliases" value="\${(row?.aliases||[]).join(", ")}" placeholder="bankleumi.co.il, leumi.com"/>
+      <small>שמות חלופיים — הפרד בפסיק</small></div>
+    <div class="form-group"><label>דומיינים נוספים</label>
       <input id="f-domains" value="\${(row?.domains||[]).join(", ")}" placeholder="leumi.co.il, bankleumi.co.il"/>
-      <small>הפרד דומיינים בפסיק</small></div>\`;
+      <small>כל הדומיינים לבדיקת DLP — הפרד בפסיק</small></div>\`;
   if (table === "advisors") return \`
     <div class="form-group"><label>שם</label>
       <input id="f-name" value="\${row?.name||""}" placeholder="ישראל ישראלי"/></div>
@@ -472,6 +484,8 @@ function buildForm(table, row) {
 function getFormData(table) {
   if (table === "customers") return {
     name: document.getElementById("f-name").value.trim(),
+    primary_domain: document.getElementById("f-primary-domain").value.trim(),
+    aliases: document.getElementById("f-aliases").value.split(",").map(d=>d.trim()).filter(Boolean),
     domains: document.getElementById("f-domains").value.split(",").map(d=>d.trim()).filter(Boolean)
   };
   if (table === "advisors") return {
