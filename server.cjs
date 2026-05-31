@@ -578,39 +578,49 @@ app.post("/api/audit", async (req, res) => {
   }
 });
 
-// Temporary seed endpoint — remove after first use
+// Seed endpoint — loads exact test data from spec document
 app.post("/api/seed", async (req, res) => {
   try {
     await pool.query(`
-      -- Clear existing data
       TRUNCATE customers, advisors, exemptions, exclusions RESTART IDENTITY CASCADE;
-
-      -- 3 Pseudo Customers
-      INSERT INTO customers (name, domains) VALUES
-        ('בנק לאומי', ARRAY['leumi.co.il', 'bankleumi.co.il', 'leumi.com']),
-        ('מגדל ביטוח', ARRAY['migdal.co.il', 'migdal.com']),
-        ('שירביט ביטוח', ARRAY['shirbit.co.il', 'shirbit.com']);
-
-      -- Advisors (Nextage employees managing these customers)
-      INSERT INTO advisors (email, name) VALUES
-        ('mor.mordechay@nextage.co.il', 'מור מרדכי'),
-        ('david.cohen@nextage.co.il', 'דוד כהן'),
-        ('noa.levi@nextage.co.il', 'נועה לוי');
-
-      -- Exemptions (emails that bypass DLP checks entirely)
-      INSERT INTO exemptions (email, reason) VALUES
-        ('mor.mordechay@nextage.co.il', 'מנהל מערכת'),
-        ('ceo@nextage.co.il', 'מנכל חברה'),
-        ('it@nextage.co.il', 'צוות IT פנימי');
-
-      -- Exclusions (file extensions that don't require encryption)
-      INSERT INTO exclusions (extension, reason) VALUES
-        ('pdf', 'PDF מוגן בנפרד'),
-        ('txt', 'קובץ טקסט לא רגיש'),
-        ('png', 'תמונה לא רגישה'),
-        ('jpg', 'תמונה לא רגישה');
     `);
-    res.json({ ok: true, message: "Database seeded with 3 pseudo-customers!" });
+
+    // Customers — exact data from spec test scenarios
+    await pool.query(`
+      INSERT INTO customers (name, primary_domain, aliases, domains) VALUES
+        ('ClientCorp Inc',     'clientcorp.com',    ARRAY['ClientCorp','CC'],          ARRAY['clientcorp.com']),
+        ('Tech Solutions Ltd', 'techsol.co.il',     ARRAY['TechSol','TS'],             ARRAY['techsol.co.il']),
+        ('Global Finance',     'globalfinance.net', ARRAY['GF','Finance Corp'],        ARRAY['globalfinance.net']);
+    `);
+
+    // Advisors — domain-based (each advisor represents an external firm's domain)
+    await pool.query(`
+      INSERT INTO advisors (email, name, linked_customers) VALUES
+        ('consultant@advisor1.com', 'Advisor Test 1', ARRAY['ClientCorp Inc']),
+        ('consultant@advisor2.com', 'Advisor Test 2', ARRAY['Tech Solutions Ltd']),
+        ('consultant@advisor3.com', 'Advisor Test 3', ARRAY['Global Finance']);
+    `);
+
+    // Exemptions — scenario 18: test@randomdomain.com has ALL_CHECKS bypass
+    await pool.query(`
+      INSERT INTO exemptions (email, reason) VALUES
+        ('test@randomdomain.com', 'ALL_CHECKS - בדיקת תרחיש 18'),
+        ('mor.mordechay@nextage.co.il', 'מנהל מערכת');
+    `);
+
+    // Exclusions — file extensions that skip Check 1
+    // (images are already hardcoded in code, these are extras)
+    await pool.query(`
+      INSERT INTO exclusions (extension, reason) VALUES
+        ('pdf',  'PDF נבדק בנפרד'),
+        ('txt',  'טקסט לא רגיש'),
+        ('png',  'תמונה'),
+        ('jpg',  'תמונה'),
+        ('jpeg', 'תמונה'),
+        ('gif',  'תמונה');
+    `);
+
+    res.json({ ok: true, message: "Seeded with spec test data — all 20 scenarios ready!" });
   } catch (err) {
     console.error("[Seed] error:", err.message);
     res.status(500).json({ ok: false, error: err.message });

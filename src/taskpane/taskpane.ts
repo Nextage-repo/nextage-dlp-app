@@ -85,7 +85,7 @@ async function runChecks(): Promise<void> {
 
 async function getEmailData(): Promise<EmailData> {
   const item = Office.context.mailbox.item as Office.MessageCompose;
-  const userEmail = Office.context.mailbox.userProfile.emailAddress;
+  const userEmail = Office.context.mailbox?.userProfile?.emailAddress || "";
 
   const [subject, to, cc, bcc, attachments] = await Promise.all([
     getSubject(item),

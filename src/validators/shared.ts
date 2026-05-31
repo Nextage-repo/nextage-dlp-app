@@ -10,13 +10,15 @@ export type Permission = ExemptionType | "STANDARD";
  * exemption applies. Exemptions with an expired `expiryDate` are ignored.
  */
 export function getUserPermission(
-  userEmail: string,
+  userEmail: string | undefined | null,
   exemptions: Exemption[],
   now: Date = new Date(),
 ): Permission {
+  if (!userEmail) return "STANDARD";
   const target = userEmail.toLowerCase();
   const exemption = exemptions.find(
     (ex) =>
+      ex.userEmail != null &&
       ex.userEmail.toLowerCase() === target &&
       (ex.expiryDate === null || new Date(ex.expiryDate) > now),
   );
