@@ -2,9 +2,9 @@
 
 // ⚠️ SAFE_MODE — when true, BLOCK severities still allow send (warnings-only mode).
 //
-// CURRENT VALUE: true — Safe Mode ON (אזהרות בלבד, אין חסימה).
-// Per spec: מצב נוכחי = Safe Mode ON. Change to false for Production.
-export const SAFE_MODE = true;
+// CURRENT VALUE: false — Production Mode (חסימה אקטיבית).
+// Check 1 (encryption) and Check 3 (unknown domain / missing subject) will BLOCK send.
+export const SAFE_MODE = false;
 
 // Internal organization domain — emails to this domain skip encryption checks
 export const INTERNAL_DOMAIN = "nextage.co.il";
