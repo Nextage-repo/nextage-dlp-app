@@ -47,19 +47,33 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
     audit.writeAudit(emailData, result);
 
     // Step 6: Decide
+    // BLOCK → hard block (no Send Anyway button, uses manifest SendMode=Block)
     if (result.shouldBlock) {
-      console.log("[OnSend] BLOCKING send");
+      console.log("[OnSend] HARD BLOCKING send");
       const issueMessages = result.results
         .filter((r) => r.severity === "BLOCK")
         .map((r) => r.message)
         .join("\n");
 
-      // SmartAlerts options (errorMessage / cancelLabel / sendModeOverride) are
-      // accepted by the OnMessageSend event but missing from the basic
-      // EventCompletedOptions typing — cast to keep strict TS happy.
       event.completed({
         allowEvent: false,
         errorMessage: `DLP חוסם את השליחה:\n${issueMessages}`,
+        cancelLabel: "תקן את הבעיות",
+      } as Office.SmartAlertsEventCompletedOptions);
+      return;
+    }
+
+    // WARNING → show dialog with "Send Anyway" option (override manifest mode)
+    if (result.hasWarning) {
+      console.log("[OnSend] WARNING — showing dialog with Send Anyway option");
+      const warningMessages = result.results
+        .filter((r) => r.severity === "WARNING")
+        .map((r) => r.message)
+        .join("\n");
+
+      event.completed({
+        allowEvent: false,
+        errorMessage: `אזהרת DLP:\n${warningMessages}`,
         cancelLabel: "תקן את הבעיות",
         sendModeOverride: Office.MailboxEnums.SendModeOverride.PromptUser,
       } as Office.SmartAlertsEventCompletedOptions);
@@ -98,7 +112,7 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
 
 async function getEmailData(): Promise<EmailData> {
   const item = Office.context.mailbox.item as Office.MessageCompose;
-  const userEmail = Office.context.mailbox.userProfile.emailAddress;
+  const userEmail = Office.context.mailbox?.userProfile?.emailAddress || "";
 
   const [subject, to, cc, bcc, attachments] = await Promise.all([
     getSubject(item),

@@ -9,6 +9,9 @@ export const SAFE_MODE = false;
 // Internal organization domain — emails to this domain skip encryption checks
 export const INTERNAL_DOMAIN = "nextage.co.il";
 
+// App version — displayed in taskpane footer. Bump on every release.
+export const APP_VERSION = "1.7.0";
+
 // API base — Azure Functions proxy URL. In dev, falls back to localhost:7071.
 export const API_BASE_URL =
   (typeof process !== "undefined" && process.env?.AZURE_FUNCTIONS_URL) ||
