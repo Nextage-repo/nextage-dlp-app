@@ -10,7 +10,7 @@ export const SAFE_MODE = false;
 export const INTERNAL_DOMAIN = "nextage.co.il";
 
 // App version — displayed in taskpane footer. Bump on every release.
-export const APP_VERSION = "1.7.0";
+export const APP_VERSION = "1.8.0";
 
 // API base — Azure Functions proxy URL. In dev, falls back to localhost:7071.
 export const API_BASE_URL =
