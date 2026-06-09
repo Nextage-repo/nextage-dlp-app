@@ -32,16 +32,16 @@ function init(): void {
   });
   document.getElementById("cancel-btn")?.addEventListener("click", closeTaskpane);
 
-  // Re-run checks automatically when user changes recipients, subject, or attachments.
-  // This keeps the InfoBar warnings up-to-date as the user edits the email.
+  // Re-run checks automatically when user changes recipients or attachments.
+  // The Office.js types don't expose addHandlerAsync on these subfields, but
+  // it exists at runtime — cast through `any` to access it.
   try {
-    const item = Office.context.mailbox.item as Office.MessageCompose;
+    const item = Office.context.mailbox.item as any;
     const debouncedRecheck = debounce(runChecks, 600);
     item.to?.addHandlerAsync?.(Office.EventType.RecipientsChanged, debouncedRecheck);
     item.cc?.addHandlerAsync?.(Office.EventType.RecipientsChanged, debouncedRecheck);
     item.bcc?.addHandlerAsync?.(Office.EventType.RecipientsChanged, debouncedRecheck);
-    item.subject?.addHandlerAsync?.(Office.EventType.InfobarClicked, debouncedRecheck);
-    (item as any).addHandlerAsync?.(Office.EventType.AttachmentsChanged, debouncedRecheck);
+    item.addHandlerAsync?.(Office.EventType.AttachmentsChanged, debouncedRecheck);
   } catch (err) {
     console.warn("[Taskpane] Could not register change handlers:", err);
   }
