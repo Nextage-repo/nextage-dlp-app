@@ -11,10 +11,67 @@ import { DLPValidator } from "../validators/validators";
 import { readAttachmentsWithHeaders } from "./attachment-reader";
 
 Office.onReady(() => {
-  // Register for V1_1 LaunchEvent (modern Outlook)
+  // Register V1_1 LaunchEvent handlers (modern Outlook 365)
   Office.actions.associate("onMessageSendHandler", onMessageSendHandler);
-  console.log("[Commands] onMessageSendHandler registered for OnMessageSend");
+  Office.actions.associate("onNewComposeHandler", onNewComposeHandler);
+  console.log("[Commands] LaunchEvent handlers registered");
 });
+
+/**
+ * Runs automatically when user opens a new compose window.
+ * Triggers DLP checks and adds InfoBar warnings, without requiring the user
+ * to manually click the DLP Guard button.
+ */
+async function onNewComposeHandler(event: Office.AddinCommands.Event): Promise<void> {
+  console.log("[OnNewCompose] === Invoked ===");
+  try {
+    const token = await authService.getTokenSilent();
+    const configService = new ConfigService(token);
+    const config = await configService.getConfig();
+    const emailData = await getEmailData();
+
+    const validator = new DLPValidator(config);
+    const result = await validator.runAllChecks(emailData);
+
+    // Add InfoBar notifications on the email — visible at the top.
+    await addInfoBarNotifications(result);
+  } catch (err) {
+    console.error("[OnNewCompose] error:", err);
+  } finally {
+    event.completed();
+  }
+}
+
+async function addInfoBarNotifications(result: { results: { severity: string; isValid: boolean; message: string }[] }): Promise<void> {
+  const item = Office.context.mailbox.item as Office.MessageCompose;
+  if (!item?.notificationMessages) return;
+
+  const keys = ["dlp_check1", "dlp_check2", "dlp_check3"];
+  await Promise.all(
+    result.results.map((r, idx) => {
+      const key = keys[idx]!;
+      if (r.severity === "INFO" || r.isValid) {
+        return new Promise<void>((resolve) =>
+          item.notificationMessages.removeAsync(key, () => resolve()),
+        );
+      }
+      const type =
+        r.severity === "BLOCK"
+          ? Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage
+          : Office.MailboxEnums.ItemNotificationMessageType.InformationalMessage;
+      const prefix = r.severity === "BLOCK" ? "❌ חסום DLP: " : "⚠️ DLP: ";
+      const message = (prefix + r.message).substring(0, 150);
+
+      return new Promise<void>((resolve) =>
+        item.notificationMessages.replaceAsync(
+          key,
+          { type, message, icon: "Icon.16x16", persistent: r.severity === "BLOCK" },
+          () => resolve(),
+        ),
+      );
+    }),
+  );
+}
 
 // Expose handler globally so V1_0 ItemSend event (Outlook Classic) can find it.
 // The legacy <Event Type="ItemSend" FunctionName="onMessageSendHandler"/> looks
