@@ -4,8 +4,8 @@
            xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
            xsi:type="MailApp">
 
-  <Id>74355faa-8aa6-40a7-abb6-566e7ebe22e2</Id>
-  <Version>5.0.0.0</Version>
+  <Id>6f1c4ec6-c5e7-422c-bb14-788b5070e61e</Id>
+  <Version>5.2.0.0</Version>
   <ProviderName>Nextage</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="Nextage DLP Guard"/>
@@ -44,7 +44,7 @@
 
   <DisableEntityHighlighting>false</DisableEntityHighlighting>
 
-  <!-- V1_0: Basic taskpane button — works in ALL Outlook versions -->
+  <!-- V1_0: toolbar button (works on older Outlook) -->
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">
     <Requirements>
       <bt:Sets DefaultMinVersion="1.3">
@@ -101,7 +101,7 @@
       </bt:LongStrings>
     </Resources>
 
-    <!-- V1_1: Modern features for Outlook 365 (Classic + New) -->
+    <!-- V1_1: Smart Alerts — OnMessageSend blocks Outlook Send button -->
     <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides/1.1" xsi:type="VersionOverridesV1_1">
       <Requirements>
         <bt:Sets DefaultMinVersion="1.12">
@@ -111,19 +111,39 @@
 
       <Hosts>
         <Host xsi:type="MailHost">
+          <Runtimes>
+            <Runtime resid="Commands.Url" lifetime="short"/>
+          </Runtimes>
           <DesktopFormFactor>
             <FunctionFile resid="Commands.Url"/>
-
-            <!-- OnNewMessageCompose: auto-runs DLP checks when user opens a new compose.
-                 Adds the InfoBar warnings without user interaction. -->
+            <ExtensionPoint xsi:type="MessageComposeCommandSurface">
+              <OfficeTab id="TabDefault">
+                <Group id="msgComposeDLPGroupV2">
+                  <Label resid="GroupLabel"/>
+                  <Control xsi:type="Button" id="msgComposeDLPButtonV2">
+                    <Label resid="TaskpaneButton.Label"/>
+                    <Supertip>
+                      <Title resid="TaskpaneButton.Label"/>
+                      <Description resid="TaskpaneButton.Tooltip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="Icon.16x16"/>
+                      <bt:Image size="32" resid="Icon.32x32"/>
+                      <bt:Image size="80" resid="Icon.80x80"/>
+                    </Icon>
+                    <Action xsi:type="ShowTaskpane">
+                      <SourceLocation resid="Taskpane.Url"/>
+                    </Action>
+                  </Control>
+                </Group>
+              </OfficeTab>
+            </ExtensionPoint>
             <ExtensionPoint xsi:type="LaunchEvent">
               <LaunchEvents>
-                <LaunchEvent Type="OnNewMessageCompose" FunctionName="onNewComposeHandler"/>
-                <LaunchEvent Type="OnMessageSend" FunctionName="onMessageSendHandler" SendMode="SoftBlock"/>
+                <LaunchEvent Type="OnMessageSend" FunctionName="onMessageSend" SendMode="SoftBlock"/>
               </LaunchEvents>
               <SourceLocation resid="Commands.Url"/>
             </ExtensionPoint>
-
           </DesktopFormFactor>
         </Host>
       </Hosts>

@@ -11,8 +11,11 @@ import { DLPValidator } from "../validators/validators";
 import { readAttachmentsWithHeaders } from "./attachment-reader";
 
 Office.onReady(() => {
-  // Register V1_1 LaunchEvent handlers (modern Outlook 365)
+  // Register handlers under BOTH names — older manifests reference
+  // `onMessageSend`, newer ones use `onMessageSendHandler`. Registering
+  // both keeps us compatible with any manifest version still floating around.
   Office.actions.associate("onMessageSendHandler", onMessageSendHandler);
+  Office.actions.associate("onMessageSend", onMessageSendHandler);
   Office.actions.associate("onNewComposeHandler", onNewComposeHandler);
   console.log("[Commands] LaunchEvent handlers registered");
 });
