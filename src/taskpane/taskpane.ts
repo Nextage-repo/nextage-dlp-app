@@ -34,31 +34,59 @@ function init(): void {
     runChecks();
   });
   document.getElementById("cancel-btn")?.addEventListener("click", closeTaskpane);
+  document.getElementById("dlp-modal-close")?.addEventListener("click", closeDlpModal);
 
-  // Re-run checks automatically when user changes recipients or attachments.
-  // The Office.js types don't expose addHandlerAsync on these subfields, but
-  // it exists at runtime — cast through `any` to access it.
-  try {
-    const item = Office.context.mailbox.item as any;
-    const debouncedRecheck = debounce(runChecks, 600);
-    item.to?.addHandlerAsync?.(Office.EventType.RecipientsChanged, debouncedRecheck);
-    item.cc?.addHandlerAsync?.(Office.EventType.RecipientsChanged, debouncedRecheck);
-    item.bcc?.addHandlerAsync?.(Office.EventType.RecipientsChanged, debouncedRecheck);
-    item.addHandlerAsync?.(Office.EventType.AttachmentsChanged, debouncedRecheck);
-  } catch (err) {
-    console.warn("[Taskpane] Could not register change handlers:", err);
-  }
+  // Event handlers (addHandlerAsync) don't fire reliably in Outlook Classic.
+  // Use polling instead — snapshot the email state and re-run checks when
+  // it changes. This works the same way across Web/Classic/New Outlook.
+  startPollingForChanges();
 
   runChecks();
 }
 
-function debounce<T extends (...args: any[]) => any>(fn: T, ms: number): T {
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-  return ((...args: any[]) => {
-    if (timeout) clearTimeout(timeout);
-    timeout = setTimeout(() => fn(...args), ms);
-  }) as T;
+let lastEmailSnapshot = "";
+
+function startPollingForChanges(): void {
+  setInterval(async () => {
+    try {
+      const snapshot = await snapshotEmailState();
+      if (snapshot && snapshot !== lastEmailSnapshot) {
+        lastEmailSnapshot = snapshot;
+        runChecks();
+      }
+    } catch {
+      // ignore — polling is best-effort
+    }
+  }, 1500);
 }
+
+async function snapshotEmailState(): Promise<string> {
+  const item = Office.context.mailbox.item as Office.MessageCompose;
+  if (!item) return "";
+
+  const get = <T>(fn: (cb: (r: { status: string; value: T }) => void) => void) =>
+    new Promise<T | null>((resolve) =>
+      fn((r) => resolve(r.status === "succeeded" ? r.value : null)),
+    );
+
+  const [subject, to, cc, bcc, atts] = await Promise.all([
+    get<string>((cb) => item.subject?.getAsync?.(cb as any)),
+    get<Office.EmailAddressDetails[]>((cb) => item.to?.getAsync?.(cb as any)),
+    get<Office.EmailAddressDetails[]>((cb) => item.cc?.getAsync?.(cb as any)),
+    get<Office.EmailAddressDetails[]>((cb) => item.bcc?.getAsync?.(cb as any)),
+    get<Office.AttachmentDetailsCompose[]>((cb) =>
+      (item as any).getAttachmentsAsync?.(cb),
+    ),
+  ]);
+
+  const recipients = [...(to ?? []), ...(cc ?? []), ...(bcc ?? [])]
+    .map((r) => r.emailAddress)
+    .sort()
+    .join(",");
+  const attachNames = (atts ?? []).map((a: any) => a.name).sort().join(",");
+  return `${subject ?? ""}|${recipients}|${attachNames}`;
+}
+
 
 async function runChecks(): Promise<void> {
   console.log("[Taskpane] ===== Starting checks =====");
@@ -307,22 +335,48 @@ function showViolationsPopup(result: DLPResult): void {
   if (dismissedViolations.has(signature)) return;
   dismissedViolations.add(signature);
 
-  const lines = violations.map((v) => {
-    const icon = v.severity === "BLOCK" ? "🚫" : "⚠️";
-    return `${icon} ${v.message}`;
-  });
-  const header = result.shouldBlock
+  // setTimeout lets the UI render the check results first, then popup.
+  setTimeout(() => openDlpModal(result, violations), 150);
+}
+
+function openDlpModal(
+  result: DLPResult,
+  violations: { severity: string; message: string }[],
+): void {
+  const overlay = document.getElementById("dlp-modal-overlay");
+  const header = document.getElementById("dlp-modal-header");
+  const body = document.getElementById("dlp-modal-body");
+  if (!overlay || !header || !body) return;
+
+  const isBlock = result.shouldBlock;
+  header.className = "dlp-modal-header " + (isBlock ? "block" : "warning");
+  header.textContent = isBlock
     ? "⛔ DLP חוסם את השליחה"
     : "⚠️ אזהרת DLP — שים לב לפני שליחה";
 
-  // setTimeout lets the UI render the check results first, then popup.
-  setTimeout(() => {
-    alert(`${header}\n\n${lines.join("\n\n")}\n\n${
-      result.shouldBlock
-        ? "אנא תקן את הבעיות לפני שליחת המייל."
-        : "המייל יישלח אבל יש לבדוק את הסימונים."
-    }`);
-  }, 100);
+  // Build body via DOM API so violation text can't break out as HTML.
+  body.replaceChildren();
+  violations.forEach((v) => {
+    const div = document.createElement("div");
+    div.className = "dlp-modal-issue " + (v.severity === "BLOCK" ? "block" : "warning");
+    const icon = v.severity === "BLOCK" ? "🚫" : "⚠️";
+    div.textContent = `${icon} ${v.message}`;
+    body.appendChild(div);
+  });
+  const footer = document.createElement("p");
+  footer.style.marginTop = "12px";
+  footer.style.fontSize = "12px";
+  footer.style.color = "#666";
+  footer.textContent = isBlock
+    ? "אנא תקן את הבעיות לפני שליחת המייל."
+    : "המייל יישלח אבל יש לבדוק את הסימונים.";
+  body.appendChild(footer);
+
+  overlay.classList.add("open");
+}
+
+function closeDlpModal(): void {
+  document.getElementById("dlp-modal-overlay")?.classList.remove("open");
 }
 
 function closeTaskpane(): void {
