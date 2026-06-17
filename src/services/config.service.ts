@@ -31,14 +31,13 @@ export class ConfigService {
   }
 
   private async fetchFromApi(): Promise<DLPConfig> {
-    const raw = await getJson<any>(
-      `${API_BASE_URL}/config`,
-      {
-        Authorization: `Bearer ${this.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      API_TIMEOUT_MS,
-    );
+    // No custom headers: a bare GET is a CORS "simple request" so it skips the
+    // preflight OPTIONS. Classic Outlook's JS-only (event-based) runtime cannot
+    // complete a preflight, so adding Authorization/Content-Type here makes the
+    // OnMessageSend config fetch fail with "Network request failed". The API does
+    // not require auth (accessToken is "no-auth"), so we omit headers entirely.
+    void this.accessToken;
+    const raw = await getJson<any>(`${API_BASE_URL}/config`, {}, API_TIMEOUT_MS);
 
     const customers = Array.isArray(raw.customers)
       ? raw.customers.map((c: any) => ({

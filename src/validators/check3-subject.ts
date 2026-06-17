@@ -25,6 +25,11 @@ export function runCheck3(input: Check3Input): CheckResult {
     return pass("המשתמש פטור מבדיקת נושא");
   }
 
+  // Internal-only emails skip all subject checks
+  if (recipients.length > 0 && recipients.every((r) => r.toLowerCase().endsWith(`@${INTERNAL_DOMAIN}`))) {
+    return pass("מייל פנימי - אין בדיקת נושא");
+  }
+
   // 1. Unknown domain check (BLOCK in Production, WARNING in Safe Mode)
   const unknownDomains = findUnknownDomains(recipients, customers, advisors, exclusions);
   if (unknownDomains.length > 0) {

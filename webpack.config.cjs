@@ -11,7 +11,7 @@ module.exports = (env, argv) => {
 
   return {
     mode: isProduction ? "production" : "development",
-    devtool: isProduction ? "source-map" : "eval-cheap-module-source-map",
+    devtool: isProduction ? "source-map" : "cheap-source-map",
     entry: {
       taskpane: "./src/taskpane/taskpane.ts",
       commands: "./src/commands/commands.ts",
@@ -21,6 +21,7 @@ module.exports = (env, argv) => {
       path: path.resolve(__dirname, "dist"),
       clean: true,
       publicPath: "/",
+      globalObject: "this",
       environment: {
         arrowFunction: false,
         const: false,
@@ -67,9 +68,7 @@ module.exports = (env, argv) => {
       new webpack.DefinePlugin({
         "process.env.AZURE_FUNCTIONS_URL": JSON.stringify(
           process.env.AZURE_FUNCTIONS_URL ||
-            (isProduction
-              ? "https://nextage-dlp-api.azurewebsites.net/api"
-              : "https://localhost:7071/api"),
+            "https://nextage-dlp-app-gchqasbzeqgkccf7.westeurope-01.azurewebsites.net/api"
         ),
       }),
       new HtmlWebpackPlugin({
@@ -98,6 +97,11 @@ module.exports = (env, argv) => {
       allowedHosts: "all",
       headers: { "Access-Control-Allow-Origin": "*" },
       historyApiFallback: { rewrites: [{ from: /^\/taskpane/, to: "/taskpane.html" }] },
+      // Disable ALL client-side injection (HMR + live reload WebSocket).
+      // commands.js runs in Classic Outlook's JS-only runtime which has no window/document/WebSocket.
+      hot: false,
+      liveReload: false,
+      client: false,
     },
   };
 };

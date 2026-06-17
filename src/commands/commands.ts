@@ -2,13 +2,30 @@
 // Runs in Shared Runtime. Invoked automatically by Office.js when user clicks Send.
 // Office.js Mailbox API 1.14 required.
 
+import { DLPConfig } from "../models/customer.model";
 import { EmailData, RecipientInfo } from "../models/dlp-result.model";
 import { AuditService } from "../services/audit.service";
 import { authService } from "../services/auth.service";
 import { ConfigService } from "../services/config.service";
-import { SAFE_MODE } from "../shared/constants";
+import { INTERNAL_DOMAIN, SAFE_MODE } from "../shared/constants";
 import { DLPValidator } from "../validators/validators";
 import { readAttachmentsWithHeaders } from "./attachment-reader";
+
+// In-memory config cache for the JS-only runtime (no sessionStorage available there).
+// Persists for the lifetime of the Outlook session — avoids an API round-trip on every send.
+let cachedConfig: DLPConfig | null = null;
+
+async function getConfigCached(): Promise<DLPConfig> {
+  if (cachedConfig) {
+    console.log("[OnSend] In-memory config cache hit");
+    return cachedConfig;
+  }
+  const token = await authService.getTokenSilent();
+  const configService = new ConfigService(token);
+  const config = await configService.getConfig();
+  cachedConfig = config;
+  return config;
+}
 
 // Register handlers under BOTH names — older manifests reference `onMessageSend`,
 // newer ones use `onMessageSendHandler`. Registering both keeps us compatible.
@@ -100,47 +117,46 @@ if (typeof window !== "undefined") {
 async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<void> {
   console.log("[OnSend] === Invoked ===");
 
-  let token: string | null = null;
   let partialEmail: Partial<EmailData> | undefined;
 
   try {
-    // Step 1: Auth token (silent SSO)
-    token = await authService.getTokenSilent();
+    // Fast-path: if every recipient is internal, skip all DLP checks and allow immediately.
+    // Internal emails do not require encryption, filename, or subject checks.
+    const fastRecipients = await getRecipientsRaw();
+    const allInternal =
+      fastRecipients.length > 0 &&
+      fastRecipients.every((r) => r.toLowerCase().endsWith(`@${INTERNAL_DOMAIN}`));
 
-    // Step 2: Load config (cached after first call)
-    const configService = new ConfigService(token);
-    const config = await configService.getConfig();
+    if (allInternal) {
+      console.log("[OnSend] All recipients internal — allowing send");
+      event.completed({ allowEvent: true });
+      return;
+    }
 
-    // Step 3: Read email data (also kept around for unavailable-event context)
+    // Load config (in-memory cached after first call)
+    const config = await getConfigCached();
+
+    // Read full email data
     const emailData = await getEmailData();
     partialEmail = emailData;
-    console.log("[OnSend] Email data:", {
-      subject: emailData.subject,
-      recipientCount: emailData.recipients.length,
-      attachmentCount: emailData.attachments.length,
-    });
 
-    // Step 4: Run DLP checks
+    // Run DLP checks
     const validator = new DLPValidator(config);
     const result = await validator.runAllChecks(emailData);
 
-    // Step 5: Audit log (fire-and-forget; never blocks send)
-    const audit = new AuditService(token);
-    audit.writeAudit(emailData, result);
+    // Audit log (fire-and-forget; never blocks send)
+    authService.getTokenSilent()
+      .then((t) => new AuditService(t).writeAudit(emailData, result))
+      .catch(() => {});
 
-    // Step 6: Decide
     if (result.shouldBlock) {
       console.log("[OnSend] BLOCKING send");
       const issueMessages = result.results
         .filter((r) => r.severity === "BLOCK")
         .map((r) => r.message)
         .join("\n");
-
       const fullMessage = `DLP חוסם את השליחה:\n${issueMessages}`;
 
-      // For Outlook Classic (ItemSend event), add a notification message to the
-      // mail item's InfoBar BEFORE calling event.completed. This is what
-      // shows up in the popup dialog and InfoBar that blocks the send.
       try {
         const item = Office.context.mailbox.item as Office.MessageCompose;
         await new Promise<void>((resolve) => {
@@ -148,7 +164,7 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
             "dlpBlock",
             {
               type: Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage,
-              message: fullMessage.substring(0, 150), // Classic InfoBar limit
+              message: fullMessage.substring(0, 150),
             },
             () => resolve(),
           );
@@ -157,9 +173,6 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
         console.warn("[OnSend] Could not set notification message:", notifyErr);
       }
 
-      // event.completed options below are honored by modern Outlook (Smart Alerts).
-      // Outlook Classic ignores the extra fields but still blocks via allowEvent:false
-      // and shows the InfoBar notification message we just set above.
       event.completed({
         allowEvent: false,
         errorMessage: fullMessage,
@@ -174,22 +187,12 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
 
     console.log("[OnSend] ALLOWING send");
     event.completed({ allowEvent: true });
-  } catch (error: unknown) {
-    // Fail-open with observability. We never want a network blip to stop
-    // the user from sending, but we DO want to see coverage gaps in audit.
-    console.error("[OnSend] Critical error — failing open:", error);
-    const reason = error instanceof Error ? error.message : String(error);
-
-    if (token) {
-      try {
-        new AuditService(token).recordUnavailable(reason, partialEmail);
-      } catch (auditErr) {
-        console.error("[OnSend] Failed to record DLP_UNAVAILABLE event:", auditErr);
-      }
-    } else {
-      console.error("[OnSend] No token — cannot record DLP_UNAVAILABLE event");
-    }
-
+  } catch (err: unknown) {
+    console.error("[OnSend] Critical error — failing open:", err);
+    const reason = err instanceof Error ? err.message : "unknown error";
+    authService.getTokenSilent()
+      .then((t) => new AuditService(t).recordUnavailable(reason, partialEmail))
+      .catch(() => {});
     event.completed({ allowEvent: true });
   }
 }
@@ -237,6 +240,21 @@ function getSubject(item: Office.MessageCompose): Promise<string> {
       }
     });
   });
+}
+
+// Returns all recipient email addresses (to+cc+bcc) as plain strings.
+// Used for the internal fast-path check before any config fetch.
+function getRecipientsRaw(): Promise<string[]> {
+  const item = Office.context.mailbox.item as Office.MessageCompose;
+  return Promise.all([
+    getRecipients(item.to),
+    getRecipients(item.cc),
+    getRecipients(item.bcc),
+  ]).then(([to, cc, bcc]) =>
+    [...to, ...cc, ...bcc]
+      .map((r) => r.emailAddress.toLowerCase().trim())
+      .filter((e) => e.length > 0 && e.includes("@")),
+  );
 }
 
 function getRecipients(field: Office.Recipients): Promise<RecipientInfo[]> {
