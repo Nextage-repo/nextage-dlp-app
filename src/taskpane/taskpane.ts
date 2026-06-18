@@ -142,8 +142,10 @@ async function runChecks(): Promise<void> {
     // resetting via the refresh button clears the dismissed set.
     showViolationsPopup(result);
   } catch (error: unknown) {
+    // Log the raw technical error for diagnostics, but show the user a clean
+    // Hebrew message instead of an exception string like "Sys.ArgumentNullException…".
     console.error("[Taskpane] error:", error);
-    showStatus(`שגיאה: ${error instanceof Error ? error.message : String(error)}`, "error");
+    showStatus("אירעה שגיאה בעת בדיקת המייל. נסה לרענן את הבדיקה.", "error");
   }
 }
 
