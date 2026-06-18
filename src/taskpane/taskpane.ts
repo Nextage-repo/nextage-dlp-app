@@ -180,12 +180,13 @@ async function updateEmailNotifications(result: DLPResult): Promise<void> {
       const prefix = r.severity === "BLOCK" ? "❌ חסום DLP: " : "⚠️ DLP: ";
       const message = (prefix + r.message).substring(0, 150);
 
-      // ErrorMessage doesn't support icon/persistent. Informational uses
-      // a different shape; keep it minimal to stay cross-platform.
+      // ErrorMessage takes only { type, message }. InformationalMessage REQUIRES
+      // both `icon` (a manifest resource id) and `persistent` — omitting them makes
+      // Office.js throw "Value cannot be null. Parameter name: icon".
       const payload: Office.NotificationMessageDetails =
         r.severity === "BLOCK"
           ? { type, message }
-          : { type, message };
+          : { type, message, icon: "Icon.16x16", persistent: false };
 
       return new Promise<void>((resolve) =>
         item.notificationMessages.replaceAsync(key, payload, () => resolve()),
