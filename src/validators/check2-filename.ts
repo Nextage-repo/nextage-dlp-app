@@ -32,28 +32,30 @@ export function runCheck2(input: Check2Input): CheckResult {
     return pass("לא זוהה לקוח לפי הנמענים");
   }
 
-  const validNames = new Set<string>();
-  matched.forEach((c) => {
-    if (c.customerName) validNames.add(c.customerName.toLowerCase());
-    c.aliases.forEach((a) => validNames.add(a.toLowerCase()));
-  });
+  // Per-customer coverage: every matched customer should have at least one
+  // attachment whose name contains the customer's name or an alias. List the
+  // customers with NO matching file as a warning. This catches an email sent to
+  // two customers where a file is named for only one of them — the other
+  // customer would receive a file that isn't theirs.
+  const uncovered: string[] = [];
+  for (const c of matched) {
+    const tokens = [c.customerName.toLowerCase(), ...c.aliases.map((a) => a.toLowerCase())].filter(
+      (t) => t.length > 0,
+    );
+    const covered = attachments.some((a) => nameMatchesAnyToken(a.name, tokens));
+    if (!covered) uncovered.push(c.customerName);
+  }
 
-  const tokens = Array.from(validNames).filter((t) => t.length > 0);
-
-  const mismatched = attachments
-    .map((a) => a.name)
-    .filter((name) => !nameMatchesAnyToken(name, tokens));
-
-  if (mismatched.length === 0) {
-    return pass("✓ שמות הקבצים תואמים את הלקוח");
+  if (uncovered.length === 0) {
+    return pass("✓ שמות הקבצים תואמים את הלקוחות");
   }
 
   return {
     check: 2,
     isValid: false,
     severity: "WARNING",
-    message: `שם קובץ לא תואם את הלקוח. שמות תקינים: ${tokens.join(", ")}`,
-    details: { mismatched, validNames: tokens },
+    message: `לא נמצא קובץ מצורף התואם ללקוח: ${uncovered.join(", ")}`,
+    details: { uncoveredCustomers: uncovered },
   };
 }
 

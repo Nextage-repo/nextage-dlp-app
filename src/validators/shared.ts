@@ -2,6 +2,7 @@
 // without coupling sibling validator files together.
 
 import { Customer, Exemption, ExemptionType } from "../models/customer.model";
+import { INTERNAL_DOMAIN } from "../shared/constants";
 
 export type Permission = ExemptionType | "STANDARD";
 
@@ -37,6 +38,11 @@ export function findCustomersInRecipients(
   for (const r of recipients) {
     const domain = r.split("@")[1]?.toLowerCase();
     if (!domain) continue;
+    // Safeguard: an internal (@INTERNAL_DOMAIN) recipient is never a "customer",
+    // even if the internal domain was mistakenly added to a customer's domain
+    // list in the knowledge center. Internal recipients must not impose customer
+    // requirements (e.g. forcing a customer name into the subject).
+    if (domain === INTERNAL_DOMAIN.toLowerCase()) continue;
 
     for (const c of customers) {
       if (c.status !== "ACTIVE") continue;
