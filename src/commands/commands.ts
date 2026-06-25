@@ -185,6 +185,28 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
       console.log("[OnSend] Safe Mode — would-block detected, allowing send");
     }
 
+    // Warnings (no hard block): show a soft prompt with "Send Anyway" / "Don't Send".
+    // sendModeOverride="promptUser" needs Mailbox 1.14; on older clients we don't
+    // hard-block a warning — we allow the send (the DLP panel still shows it).
+    const warnings = result.results.filter((r) => r.severity === "WARNING" && !r.isValid);
+    if (warnings.length > 0) {
+      const warnMessage = `אזהרת DLP:\n${warnings.map((r) => r.message).join("\n")}`;
+      const supportsPrompt =
+        !!Office.context?.requirements?.isSetSupported?.("Mailbox", "1.14");
+      if (supportsPrompt) {
+        console.log("[OnSend] WARNING — prompting user (Send Anyway / Don't Send)");
+        event.completed({
+          allowEvent: false,
+          errorMessage: warnMessage,
+          sendModeOverride: "promptUser",
+        } as Office.SmartAlertsEventCompletedOptions);
+      } else {
+        console.log("[OnSend] WARNING — client lacks 1.14 promptUser; allowing send");
+        event.completed({ allowEvent: true });
+      }
+      return;
+    }
+
     console.log("[OnSend] ALLOWING send");
     event.completed({ allowEvent: true });
   } catch (err: unknown) {

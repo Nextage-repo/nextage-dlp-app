@@ -30,16 +30,17 @@ export function runCheck3(input: Check3Input): CheckResult {
     return pass("מייל פנימי - אין בדיקת נושא");
   }
 
-  // 1. Unknown domain check (BLOCK in Production, WARNING in Safe Mode)
+  // 1. Unknown domain check — WARNING only (alert the user). An unknown domain no
+  // longer hard-blocks on its own; if there's an unencrypted attachment, Check 1
+  // still blocks the send. So: unknown domain + encrypted/no file -> warning prompt
+  // (Send Anyway / Don't Send); unknown domain + unencrypted file -> hard block.
   const unknownDomains = findUnknownDomains(recipients, customers, advisors, exclusions);
   if (unknownDomains.length > 0) {
-    const severity = SAFE_MODE ? "WARNING" : "BLOCK";
-    const note = SAFE_MODE ? " (Safe Mode)" : "";
     return {
       check: 3,
       isValid: false,
-      severity,
-      message: `דומיינים לא מוכרים: ${unknownDomains.join(", ")}. אנא פנה ל-IT.${note}`,
+      severity: "WARNING",
+      message: `דומיין לא מוכר: ${unknownDomains.join(", ")}. ודא שהקבצים מוצפנים לפני שליחה.`,
       details: { unknownDomains },
     };
   }

@@ -9,7 +9,7 @@ describe("runCheck3 (subject + domain validation)", () => {
     primaryDomain: "acme.com",
   });
 
-  it("BLOCKs on unknown recipient domain", () => {
+  it("WARNs on unknown recipient domain (encryption check handles blocking)", () => {
     const r = runCheck3({
       subject: "anything",
       recipients: ["someone@unknown.example"],
@@ -19,7 +19,8 @@ describe("runCheck3 (subject + domain validation)", () => {
       exemptions: [],
       exclusions: [],
     });
-    expect(r.severity).toBe("BLOCK");
+    expect(r.severity).toBe("WARNING");
+    expect(r.isValid).toBe(false);
     expect(r.message).toContain("unknown.example");
   });
 
