@@ -10,6 +10,8 @@ import {
   trailerPdfEncrypted,
   trailerPdfPlain,
   headerHtmlEncrypted,
+  headerHtmlEncryptedImg,
+  trailerHtmlCrypto,
   headerHtmlPlain,
   headerZipEncrypted,
   headerZipPlain,
@@ -61,6 +63,21 @@ describe("classify (magic-byte detection)", () => {
 
   it("treats a plain HTML file as UNENCRYPTED", () => {
     expect(classify(attachment("report.html", headerHtmlPlain))).toBe("UNENCRYPTED");
+  });
+
+  it("detects encrypted HTML even when an inlined logo pushes the payload past 4 KB (CSS signature in header)", () => {
+    expect(classify(attachment("mesh_summary_protected.html", headerHtmlEncryptedImg))).toBe("ENCRYPTED");
+  });
+
+  it("detects encrypted HTML via the decryption code in the trailer", () => {
+    // Header has only the template title (no CSS tokens); trailer carries crypto.
+    const headerTitleOnly = Uint8Array.from(
+      "<!DOCTYPE html><head><title>Protected Document</title></head><body>",
+      (c) => c.charCodeAt(0),
+    );
+    expect(
+      classify(attachment("doc_protected.html", headerTitleOnly, { trailerBytes: trailerHtmlCrypto })),
+    ).toBe("ENCRYPTED");
   });
 
   it("returns UNVERIFIABLE when header missing or too short", () => {

@@ -71,6 +71,24 @@ export const headerHtmlPlain = toBytes(
   "<!DOCTYPE html><html><head><title>Quarterly Report</title></head><body><h1>Hello</h1><p>Some content.</p></body></html>",
 );
 
+/**
+ * Encrypted HTML where a large inlined base64 logo pushes `const DATA` and the
+ * password input PAST the 4 KB header window — only the title + lock-screen CSS
+ * survive in the header. Mirrors mesh_approval_summary_protected.html.
+ */
+export const headerHtmlEncryptedImg = toBytes(
+  '<!DOCTYPE html><html><head><title>Protected Document</title><style>' +
+    ".pw-row{position:relative}.eye{cursor:pointer}.prog-bar{height:100%}.prog-text{font-size:.8em}" +
+    "body.viewing .card{display:none}body.viewing iframe{display:block}</style></head>" +
+    '<body><div class="card"><img src="data:image/png;base64,' +
+    "A".repeat(6000) +
+    '">',
+);
+/** The decryption code that sits at the END of an encrypted HTML file. */
+export const trailerHtmlCrypto = toBytes(
+  '<script>const DATA="x";crypto.subtle.decrypt({name:"AES-GCM"},k,ct);</script></body></html>',
+);
+
 // ----------------------------------------------------------------------------
 // Attachments
 // ----------------------------------------------------------------------------

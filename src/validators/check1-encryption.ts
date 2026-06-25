@@ -138,10 +138,12 @@ export function classify(att: AttachmentWithHeader): EncryptionStatus {
   }
 
   // HTML — the org's encryptor produces a self-decrypting HTML file: a password
-  // lock-screen plus the AES-GCM ciphertext inlined as `const DATA = "..."`. A
+  // lock-screen template plus the AES-GCM ciphertext inlined as `const DATA`. A
   // plain HTML file has none of these markers, so we can tell them apart.
   if (HTML_EXTENSION_REGEX.test(att.name)) {
-    return htmlIsEncrypted(toLatin1(header)) ? "ENCRYPTED" : "UNENCRYPTED";
+    const headerText = toLatin1(header);
+    const trailerText = att.trailerBytes ? toLatin1(att.trailerBytes) : "";
+    return htmlIsEncrypted(headerText, trailerText) ? "ENCRYPTED" : "UNENCRYPTED";
   }
 
   // Anything else: assume unencrypted unless we have evidence otherwise.
@@ -150,16 +152,31 @@ export function classify(att: AttachmentWithHeader): EncryptionStatus {
 
 const HTML_EXTENSION_REGEX = /\.html?$/i;
 
-// Detects the org's self-decrypting encrypted-HTML format. Requires the inlined
-// ciphertext variable AND a lock-screen marker, so a normal HTML page that
-// merely mentions "Protected Document" won't be mistaken for encrypted.
-function htmlIsEncrypted(headerText: string): boolean {
-  const hasPayload = /const\s+DATA\s*=\s*["'`]/.test(headerText);
-  const hasLockScreen =
-    /Protected Document/i.test(headerText) ||
-    /id=["']pw["']/i.test(headerText) ||
-    /\bunlock\s*\(/.test(headerText);
-  return hasPayload && hasLockScreen;
+// Detects the org's self-decrypting encrypted-HTML format.
+//
+// The template always opens with <title>Protected Document</title> and a fixed
+// lock-screen <style> block (in the first 4 KB), then inlines the AES-GCM
+// ciphertext as `const DATA = "..."` followed by the crypto.subtle decryption
+// code near the END of the file. A large inlined logo image can push the payload
+// and password input past the 4 KB header window, so we must NOT rely on those
+// alone — we gate on the template title plus ANY corroborating signal found in
+// the header OR the trailer.
+function htmlIsEncrypted(headerText: string, trailerText: string): boolean {
+  // Must be the encryptor's lock-screen template.
+  if (!/Protected Document/i.test(headerText)) return false;
+
+  const combined = headerText + "\n" + trailerText;
+  // Lock-screen CSS tokens live in the top <style> block — always within the
+  // first 4 KB, before any inlined image.
+  const cssTokens = ["body.viewing", ".prog-bar", ".prog-text", ".pw-row", ".eye"];
+  const cssHits = cssTokens.reduce((n, t) => (headerText.includes(t) ? n + 1 : n), 0);
+  const hasPayload = /const\s+DATA\s*=\s*["'`]/.test(combined);
+  const hasCrypto =
+    /crypto\.subtle/.test(combined) || /AES-GCM/.test(combined) || /PBKDF2/.test(combined);
+  const hasLock = /id=["']pw["']/i.test(combined) || /\bunlock\s*\(/.test(combined);
+
+  // Title + at least one technical/structural signal => the org's encrypted HTML.
+  return cssHits >= 2 || hasPayload || hasCrypto || hasLock;
 }
 
 function toLatin1(bytes: Uint8Array): string {
