@@ -6,6 +6,11 @@ import {
   headerOLE2,
   headerPdfEncrypted,
   headerPdfPlain,
+  headerPdfPlainHead,
+  trailerPdfEncrypted,
+  trailerPdfPlain,
+  headerHtmlEncrypted,
+  headerHtmlPlain,
   headerZipEncrypted,
   headerZipPlain,
 } from "./fixtures";
@@ -36,6 +41,26 @@ describe("classify (magic-byte detection)", () => {
 
   it("treats plain PDFs as UNENCRYPTED", () => {
     expect(classify(attachment("report.pdf", headerPdfPlain))).toBe("UNENCRYPTED");
+  });
+
+  it("detects /Encrypt in the PDF TRAILER (header alone is plain)", () => {
+    expect(
+      classify(attachment("report.pdf", headerPdfPlainHead, { trailerBytes: trailerPdfEncrypted })),
+    ).toBe("ENCRYPTED");
+  });
+
+  it("treats a PDF with a plain trailer as UNENCRYPTED", () => {
+    expect(
+      classify(attachment("report.pdf", headerPdfPlainHead, { trailerBytes: trailerPdfPlain })),
+    ).toBe("UNENCRYPTED");
+  });
+
+  it("treats the org's encrypted HTML as ENCRYPTED", () => {
+    expect(classify(attachment("logo_preview_protected.html", headerHtmlEncrypted))).toBe("ENCRYPTED");
+  });
+
+  it("treats a plain HTML file as UNENCRYPTED", () => {
+    expect(classify(attachment("report.html", headerHtmlPlain))).toBe("UNENCRYPTED");
   });
 
   it("returns UNVERIFIABLE when header missing or too short", () => {

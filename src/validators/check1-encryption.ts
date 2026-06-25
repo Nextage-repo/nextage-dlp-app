@@ -130,28 +130,44 @@ export function classify(att: AttachmentWithHeader): EncryptionStatus {
     return "UNVERIFIABLE";
   }
 
-  // PDF — scan the readable portion of the header for an /Encrypt reference.
+  // PDF — an encrypted PDF declares an /Encrypt entry in its trailer, which sits
+  // at the END of the file (not the header). Scan BOTH the header and the trailer.
   if (startsWith(header, MAGIC_BYTES.PDF) || PDF_EXTENSION_REGEX.test(att.name)) {
-    return pdfIsEncrypted(header) ? "ENCRYPTED" : "UNENCRYPTED";
+    const text = toLatin1(header) + (att.trailerBytes ? toLatin1(att.trailerBytes) : "");
+    return text.includes("/Encrypt") ? "ENCRYPTED" : "UNENCRYPTED";
+  }
+
+  // HTML — the org's encryptor produces a self-decrypting HTML file: a password
+  // lock-screen plus the AES-GCM ciphertext inlined as `const DATA = "..."`. A
+  // plain HTML file has none of these markers, so we can tell them apart.
+  if (HTML_EXTENSION_REGEX.test(att.name)) {
+    return htmlIsEncrypted(toLatin1(header)) ? "ENCRYPTED" : "UNENCRYPTED";
   }
 
   // Anything else: assume unencrypted unless we have evidence otherwise.
   return "UNENCRYPTED";
 }
 
-function pdfIsEncrypted(header: Uint8Array): boolean {
-  // Scan the buffer as Latin-1 for "/Encrypt". For the vast majority of PDFs
-  // produced by Office/Acrobat the trailer is near the start of the file when
-  // it's linearized, or the cross-reference table sits within the first KB.
-  // For non-linearized PDFs we'd need to seek to the trailer; that's not
-  // possible from the Office.js attachment API without reading the whole file.
-  const needle = "/Encrypt";
-  // Build a Latin-1 string from the bytes.
+const HTML_EXTENSION_REGEX = /\.html?$/i;
+
+// Detects the org's self-decrypting encrypted-HTML format. Requires the inlined
+// ciphertext variable AND a lock-screen marker, so a normal HTML page that
+// merely mentions "Protected Document" won't be mistaken for encrypted.
+function htmlIsEncrypted(headerText: string): boolean {
+  const hasPayload = /const\s+DATA\s*=\s*["'`]/.test(headerText);
+  const hasLockScreen =
+    /Protected Document/i.test(headerText) ||
+    /id=["']pw["']/i.test(headerText) ||
+    /\bunlock\s*\(/.test(headerText);
+  return hasPayload && hasLockScreen;
+}
+
+function toLatin1(bytes: Uint8Array): string {
   let s = "";
-  for (let i = 0; i < header.length; i++) {
-    s += String.fromCharCode(header[i]!);
+  for (let i = 0; i < bytes.length; i++) {
+    s += String.fromCharCode(bytes[i]!);
   }
-  return s.includes(needle);
+  return s;
 }
 
 function startsWith(actual: Uint8Array, expected: readonly number[]): boolean {

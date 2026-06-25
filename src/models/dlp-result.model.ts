@@ -24,6 +24,9 @@ export interface AttachmentWithHeader {
   size: number;
   isInline: boolean;
   magicBytes: Uint8Array | null;
+  // Last ~8 KiB of the file. PDFs declare encryption with an /Encrypt entry in
+  // the trailer at the END of the file, so the header alone is not enough.
+  trailerBytes: Uint8Array | null;
 }
 
 export interface RecipientInfo {

@@ -52,6 +52,10 @@ function decodeBase64(input: string, maxBytes: number): Uint8Array {
 const HEADER_BYTES = 4096;
 // 4 KiB binary = ~5462 base64 chars. We slice a bit more for safety.
 const BASE64_CHARS_TO_READ = 5600;
+// Trailer window: PDFs put the /Encrypt entry in the trailer at the end of the
+// file. 8 KiB from the end is plenty to capture it.
+const TRAILER_BYTES = 8192;
+const BASE64_TRAILER_CHARS = 11000;
 
 export async function readAttachmentsWithHeaders(
   item: Office.MessageCompose,
@@ -59,13 +63,14 @@ export async function readAttachmentsWithHeaders(
   const attachments = await listAttachments(item);
   const enriched = await Promise.all(
     attachments.map(async (att) => {
-      const magicBytes = await readHeaderBytes(item, att.id).catch(() => null);
+      const slice = await readContentSlices(item, att.id).catch(() => null);
       return {
         id: att.id,
         name: att.name,
         size: att.size ?? 0,
         isInline: att.isInline ?? false,
-        magicBytes,
+        magicBytes: slice?.magicBytes ?? null,
+        trailerBytes: slice?.trailerBytes ?? null,
       } satisfies AttachmentWithHeader;
     }),
   );
@@ -90,7 +95,12 @@ function listAttachments(item: Office.MessageCompose): Promise<Office.Attachment
   });
 }
 
-function readHeaderBytes(item: Office.MessageCompose, attachmentId: string): Promise<Uint8Array> {
+interface ContentSlices {
+  magicBytes: Uint8Array;
+  trailerBytes: Uint8Array | null;
+}
+
+function readContentSlices(item: Office.MessageCompose, attachmentId: string): Promise<ContentSlices> {
   return new Promise((resolve, reject) => {
     if (typeof item.getAttachmentContentAsync !== "function") {
       reject(new Error("getAttachmentContentAsync not available (mobile?)"));
@@ -113,16 +123,27 @@ function readHeaderBytes(item: Office.MessageCompose, attachmentId: string): Pro
         }
 
         try {
-          // Trim to a multiple of 4 so the decoder doesn't choke on partial groups.
-          const sample = value.content.slice(0, BASE64_CHARS_TO_READ);
-          const aligned = sample.slice(0, sample.length - (sample.length % 4));
           // NOTE: do NOT use atob() here. Classic Outlook's JS-only send runtime
           // (OnMessageSend) has no browser globals, so atob is undefined there and
           // the decode would throw -> magicBytes=null -> Check 1 reports the file
           // "unverifiable" and blocks a properly-encrypted attachment. decodeBase64
           // is self-contained and works in both runtimes.
-          const bytes = decodeBase64(aligned, HEADER_BYTES);
-          resolve(bytes);
+          // Trim to a multiple of 4 so the decoder doesn't choke on partial groups.
+          const content = value.content;
+          const headSample = content.slice(0, BASE64_CHARS_TO_READ);
+          const headAligned = headSample.slice(0, headSample.length - (headSample.length % 4));
+          const magicBytes = decodeBase64(headAligned, HEADER_BYTES);
+
+          // Trailer: the last chunk, starting on a 4-char (3-byte) boundary so the
+          // decode stays byte-aligned. Captures the PDF /Encrypt trailer at EOF.
+          let trailerBytes: Uint8Array | null = null;
+          if (content.length > BASE64_CHARS_TO_READ) {
+            let start = Math.max(0, content.length - BASE64_TRAILER_CHARS);
+            start += (4 - (start % 4)) % 4; // round up to a 4-char boundary
+            trailerBytes = decodeBase64(content.slice(start), TRAILER_BYTES + 16);
+          }
+
+          resolve({ magicBytes, trailerBytes });
         } catch (e) {
           reject(e instanceof Error ? e : new Error(String(e)));
         }

@@ -52,6 +52,25 @@ export const headerPdfEncrypted = (() => {
   return Uint8Array.from(s, (c) => c.charCodeAt(0));
 })();
 
+const toBytes = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
+
+/** Realistic case: plain PDF header, /Encrypt only in the trailer at EOF. */
+export const headerPdfPlainHead = toBytes("%PDF-1.7\n%aaaa\n1 0 obj\n<< /Type /Catalog >>\nstream\n....binary....");
+export const trailerPdfEncrypted = toBytes("xref\n0 5\ntrailer\n<< /Size 208 /Root 1 0 R /Encrypt 207 0 R >>\nstartxref\n750000\n%%EOF\n");
+export const trailerPdfPlain = toBytes("xref\n0 5\ntrailer\n<< /Size 208 /Root 1 0 R /Info 2 0 R >>\nstartxref\n750000\n%%EOF\n");
+
+/** Org encrypted-HTML header: lock-screen + inlined ciphertext. */
+export const headerHtmlEncrypted = toBytes(
+  '<!DOCTYPE html><html><head><title>Protected Document</title></head><body>' +
+    '<input type="password" id="pw"><button onclick="unlock()">Unlock</button>' +
+    '<script>const DATA = "qQJ0MUOIwv/wh8HROq58R+nGqcnHKtTAk6JUjs";</script>',
+);
+
+/** Plain HTML page — must be treated as UNENCRYPTED. */
+export const headerHtmlPlain = toBytes(
+  "<!DOCTYPE html><html><head><title>Quarterly Report</title></head><body><h1>Hello</h1><p>Some content.</p></body></html>",
+);
+
 // ----------------------------------------------------------------------------
 // Attachments
 // ----------------------------------------------------------------------------
@@ -68,6 +87,7 @@ export function attachment(
     size: 1024,
     isInline: false,
     magicBytes,
+    trailerBytes: null,
     ...overrides,
   };
 }
