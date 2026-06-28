@@ -40,7 +40,7 @@ export function runCheck3(input: Check3Input): CheckResult {
       check: 3,
       isValid: false,
       severity: "WARNING",
-      message: `דומיין לא מוכר: ${unknownDomains.join(", ")}. ודא שהקבצים מוצפנים לפני שליחה.`,
+      message: `דומיין לא מוכר: ${unknownDomains.join(", ")}. במידה ומדובר בלקוח או ספק קבוע עדכן את מחלקת IT.`,
       details: { unknownDomains },
     };
   }
