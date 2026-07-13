@@ -15,7 +15,7 @@ import {
   AttachmentWithHeader,
   CheckResult,
 } from "../models/dlp-result.model";
-import { Exclusion, Exemption } from "../models/customer.model";
+import { Exclusion, Exemption, Rule } from "../models/customer.model";
 import {
   ARCHIVE_EXTENSIONS_REGEX,
   IMAGE_EXTENSIONS_REGEX,
@@ -26,6 +26,7 @@ import {
   SAFE_MODE,
 } from "../shared/constants";
 import { getUserPermission } from "./shared";
+import { findEncryptionExemption } from "./rules-exemption";
 
 export interface Check1Input {
   attachments: AttachmentWithHeader[];
@@ -33,12 +34,14 @@ export interface Check1Input {
   userEmail: string;
   exclusions: Exclusion[];
   exemptions: Exemption[];
+  subject: string;
+  rules: Rule[];
 }
 
 type EncryptionStatus = "ENCRYPTED" | "UNENCRYPTED" | "UNVERIFIABLE";
 
 export function runCheck1(input: Check1Input): CheckResult {
-  const { attachments, recipients, userEmail, exclusions, exemptions } = input;
+  const { attachments, recipients, userEmail, exclusions, exemptions, subject, rules } = input;
 
   // 1. User exemption
   const permission = getUserPermission(userEmail, exemptions);
@@ -59,6 +62,19 @@ export function runCheck1(input: Check1Input): CheckResult {
   // 4. No attachments
   if (attachments.length === 0) {
     return pass("אין קבצים מצורפים");
+  }
+
+  // 5. Subject-based encryption exemption ("חוקים"): if the subject contains an
+  // active rule expression, skip ONLY the encryption check. Checks 2 & 3 still run.
+  const exemptRule = findEncryptionExemption(subject, rules);
+  if (exemptRule) {
+    return {
+      check: 1,
+      isValid: true,
+      severity: "INFO",
+      message: `פטור מהצפנה לפי חוק: «${exemptRule.expression}»`,
+      details: { encryptionExemptExpression: exemptRule.expression, ruleId: exemptRule.id },
+    };
   }
 
   // 5. Classify each non-image attachment

@@ -89,6 +89,18 @@ export class ConfigService {
         }))
       : [];
 
-    return { customers, advisors, exemptions, exclusions };
+    const rules = Array.isArray(raw.rules)
+      ? raw.rules
+          .filter((r: any) => r.active !== false)
+          .map((r: any) => ({
+            id: String(r.id),
+            expression: r.expression ?? "",
+            language: r.language ?? "",
+            ruleType: r.rule_type ?? "Encryption Exemption",
+            active: r.active !== false,
+          }))
+      : [];
+
+    return { customers, advisors, exemptions, exclusions, rules };
   }
 }

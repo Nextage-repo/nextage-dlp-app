@@ -38,6 +38,31 @@ export class AuditService {
       .catch((err) => console.warn("[Audit] unavailable-event write failed:", err));
   }
 
+  // Logs a "חוקים" encryption exemption: the subject matched a rule expression,
+  // so Check 1 (encryption) was skipped for this email.
+  recordExemption(email: EmailData, expression: string): void {
+    const entry: AuditEntry = {
+      id: createId(),
+      partitionKey: email.userEmail,
+      timestamp: new Date().toISOString(),
+      userEmail: email.userEmail,
+      action: "EXEMPTION_APPLIED",
+      checkNumber: 1,
+      result: "EXEMPTED",
+      recipientEmails: email.recipients,
+      attachmentNames: email.attachments.map((a) => a.name),
+      messageSubject: email.subject,
+      severity: "INFO",
+      ttl: AUDIT_TTL_SECONDS,
+    };
+    // `data` is what the server persists (JSONB) — include the matched expression.
+    this.postEntry({
+      ...entry,
+      data: { type: "ENCRYPTION_EXEMPT", expression, subject: email.subject, recipients: email.recipients },
+    } as AuditEntry & { data: unknown })
+      .catch((err) => console.warn("[Audit] exemption write failed:", err));
+  }
+
   private buildEntries(email: EmailData, result: DLPResult): AuditEntry[] {
     const baseEntry = {
       partitionKey: email.userEmail,

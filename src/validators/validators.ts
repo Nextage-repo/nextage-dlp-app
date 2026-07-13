@@ -33,6 +33,8 @@ export class DLPValidator {
       userEmail: email.userEmail,
       exclusions: this.config.exclusions,
       exemptions: this.config.exemptions,
+      subject: email.subject,
+      rules: this.config.rules,
     });
 
     const check2 = runCheck2({

@@ -50,9 +50,21 @@ export interface Exclusion {
   expiryDate: string | null;
 }
 
+// "חוקים" (Rules) — subject-based exemption expressions. A rule whose expression
+// appears (case-insensitive substring) in the email subject skips ONLY the
+// encryption check (Check 1). Filename (Check 2) and subject/domain (Check 3) still run.
+export interface Rule {
+  id: string;
+  expression: string;
+  language: string;
+  ruleType: string; // e.g. "Encryption Exemption"
+  active: boolean;
+}
+
 export interface DLPConfig {
   customers: Customer[];
   advisors: Advisor[];
   exemptions: Exemption[];
   exclusions: Exclusion[];
+  rules: Rule[];
 }

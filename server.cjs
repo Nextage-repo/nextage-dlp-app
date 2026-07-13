@@ -51,7 +51,36 @@ async function initDB() {
         action TEXT,
         data JSONB
       );
+      CREATE TABLE IF NOT EXISTS rules (
+        id SERIAL PRIMARY KEY,
+        expression TEXT NOT NULL,
+        language TEXT DEFAULT 'Hebrew',
+        rule_type TEXT NOT NULL DEFAULT 'Encryption Exemption',
+        active BOOLEAN NOT NULL DEFAULT TRUE
+      );
     `);
+
+    // Seed the "חוקים" rules list once (only if empty).
+    const ruleCount = await pool.query("SELECT COUNT(*)::int AS n FROM rules");
+    if (ruleCount.rows[0].n === 0) {
+      const seed = [
+        ["חשבונית ספק", "Hebrew"],
+        ["חשבוניות ספק", "Hebrew"],
+        ["AP Invoice", "English"],
+        ["AP Invoices", "English"],
+        ["חשבונית לקוח", "Hebrew"],
+        ["חשבוניות לקוח", "Hebrew"],
+        ["AR Invoice", "English"],
+        ["AR Invoices", "English"],
+      ];
+      for (const [expr, lang] of seed) {
+        await pool.query(
+          "INSERT INTO rules (expression, language, rule_type, active) VALUES ($1, $2, 'Encryption Exemption', TRUE)",
+          [expr, lang],
+        );
+      }
+      console.log("✅ Seeded rules (חוקים) with " + seed.length + " expressions");
+    }
     console.log("✅ Database tables ready");
   } catch (err) {
     console.error("❌ DB init error:", err.message);
@@ -184,6 +213,32 @@ app.delete("/api/admin/exclusions/:id", adminAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Rules (חוקים) — subject-based encryption-exemption expressions
+app.get("/api/admin/rules", adminAuth, async (req, res) => {
+  const r = await pool.query("SELECT * FROM rules ORDER BY id");
+  res.json(r.rows);
+});
+app.post("/api/admin/rules", adminAuth, async (req, res) => {
+  const { expression, language, rule_type, active } = req.body;
+  const r = await pool.query(
+    "INSERT INTO rules (expression, language, rule_type, active) VALUES ($1, $2, $3, $4) RETURNING *",
+    [expression, language || "Hebrew", rule_type || "Encryption Exemption", active !== false]
+  );
+  res.json(r.rows[0]);
+});
+app.put("/api/admin/rules/:id", adminAuth, async (req, res) => {
+  const { expression, language, rule_type, active } = req.body;
+  const r = await pool.query(
+    "UPDATE rules SET expression=$1, language=$2, rule_type=$3, active=$4 WHERE id=$5 RETURNING *",
+    [expression, language || "Hebrew", rule_type || "Encryption Exemption", active !== false, req.params.id]
+  );
+  res.json(r.rows[0]);
+});
+app.delete("/api/admin/rules/:id", adminAuth, async (req, res) => {
+  await pool.query("DELETE FROM rules WHERE id=$1", [req.params.id]);
+  res.json({ ok: true });
+});
+
 // Audit log (read only)
 app.get("/api/admin/audit", adminAuth, async (req, res) => {
   const r = await pool.query("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200");
@@ -279,6 +334,7 @@ app.get("/admin", (req, res) => {
     <button onclick="showTab('advisors',this)">🧑‍💼 יועצים</button>
     <button onclick="showTab('exemptions',this)">✅ פטורים</button>
     <button onclick="showTab('exclusions',this)">📎 סיומות קבצים</button>
+    <button onclick="showTab('rules',this)">📜 חוקים</button>
     <button onclick="showTab('audit',this)">📋 לוג ביקורת</button>
   </nav>
   <main>
@@ -328,6 +384,18 @@ app.get("/admin", (req, res) => {
         </div>
         <table><thead><tr><th>סיומת</th><th>סיבה</th><th>פעולות</th></tr></thead>
         <tbody id="table-exclusions"></tbody></table>
+      </div>
+    </div>
+
+    <!-- RULES (חוקים) -->
+    <div class="section" id="section-rules">
+      <div class="card">
+        <div class="card-header">
+          <h2>חוקים — פטור מהצפנה לפי נושא המייל</h2>
+          <button class="btn btn-success btn-sm" onclick="openModal('rules')">+ הוסף חוק</button>
+        </div>
+        <table><thead><tr><th>ביטוי</th><th>שפה</th><th>סוג חוק</th><th>פעיל</th><th>פעולות</th></tr></thead>
+        <tbody id="table-rules"></tbody></table>
       </div>
     </div>
 
@@ -429,6 +497,16 @@ async function loadTable(name) {
         <button class="btn btn-primary btn-sm" onclick='editRow("exclusions",\${JSON.stringify(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("exclusions",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
+  } else if (name === "rules") {
+    tbody.innerHTML = data.map(r => \`<tr>
+      <td><strong>\${r.expression}</strong></td>
+      <td>\${r.language||""}</td>
+      <td><span class="tag">\${r.rule_type||""}</span></td>
+      <td>\${r.active ? '<span class="tag tag-green">פעיל</span>' : '<span class="tag tag-gray">לא פעיל</span>'}</td>
+      <td class="actions">
+        <button class="btn btn-primary btn-sm" onclick='editRow("rules",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("rules",\${r.id})'>🗑️</button>
+      </td></tr>\`).join("");
   } else if (name === "audit") {
     tbody.innerHTML = data.map(r => \`<tr>
       <td class="audit-time">\${new Date(r.created_at).toLocaleString("he-IL")}</td>
@@ -450,7 +528,7 @@ function openModal(table, row) {
 function editRow(table, row) { openModal(table, row); }
 
 function tableLabel(t) {
-  return { customers:"לקוח", advisors:"יועץ", exemptions:"פטור", exclusions:"סיומת" }[t] || t;
+  return { customers:"לקוח", advisors:"יועץ", exemptions:"פטור", exclusions:"סיומת", rules:"חוק" }[t] || t;
 }
 
 function buildForm(table, row) {
@@ -485,6 +563,23 @@ function buildForm(table, row) {
       <small>ללא נקודה</small></div>
     <div class="form-group"><label>סיבה</label>
       <input id="f-reason" value="\${row?.reason||""}" placeholder="PDF מוגן בנפרד"/></div>\`;
+  if (table === "rules") return \`
+    <div class="form-group"><label>ביטוי (Expression)</label>
+      <input id="f-expression" value="\${row?.expression||""}" placeholder="חשבונית ספק"/>
+      <small>מחרוזת שתיבדק כתת-מחרוזת בתוך נושא המייל (לא תלוי רישיות)</small></div>
+    <div class="form-group"><label>שפה</label>
+      <select id="f-language">
+        <option value="Hebrew" \${row?.language!=="English"?"selected":""}>Hebrew</option>
+        <option value="English" \${row?.language==="English"?"selected":""}>English</option>
+      </select></div>
+    <div class="form-group"><label>סוג חוק</label>
+      <input id="f-rule-type" value="\${row?.rule_type||"Encryption Exemption"}"/>
+      <small>ברירת מחדל: Encryption Exemption</small></div>
+    <div class="form-group"><label>פעיל</label>
+      <select id="f-active">
+        <option value="true" \${row?.active!==false?"selected":""}>כן</option>
+        <option value="false" \${row?.active===false?"selected":""}>לא</option>
+      </select></div>\`;
 }
 
 function getFormData(table) {
@@ -506,6 +601,12 @@ function getFormData(table) {
   if (table === "exclusions") return {
     extension: document.getElementById("f-extension").value.trim().replace(".",""),
     reason: document.getElementById("f-reason").value.trim()
+  };
+  if (table === "rules") return {
+    expression: document.getElementById("f-expression").value.trim(),
+    language: document.getElementById("f-language").value,
+    rule_type: document.getElementById("f-rule-type").value.trim() || "Encryption Exemption",
+    active: document.getElementById("f-active").value === "true"
   };
 }
 
@@ -544,11 +645,12 @@ function toast(msg) {
 // Config endpoint — reads from PostgreSQL
 app.get("/api/config", async (req, res) => {
   try {
-    const [customers, advisors, exemptions, exclusions] = await Promise.all([
+    const [customers, advisors, exemptions, exclusions, rules] = await Promise.all([
       pool.query("SELECT * FROM customers"),
       pool.query("SELECT * FROM advisors"),
       pool.query("SELECT * FROM exemptions"),
       pool.query("SELECT * FROM exclusions"),
+      pool.query("SELECT * FROM rules WHERE active = TRUE"),
     ]);
 
     res.json({
@@ -556,6 +658,7 @@ app.get("/api/config", async (req, res) => {
       advisors: advisors.rows,
       exemptions: exemptions.rows,
       exclusions: exclusions.rows,
+      rules: rules.rows,
     });
   } catch (err) {
     console.error("[Config] DB error:", err.message);

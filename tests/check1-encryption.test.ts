@@ -98,7 +98,17 @@ describe("runCheck1", () => {
     userEmail: "sender@nextage.co.il",
     exclusions: [],
     exemptions: [],
+    subject: "regular subject with no rule",
+    rules: [],
   };
+
+  const rule = (expression: string, active = true) => ({
+    id: "r-" + expression,
+    expression,
+    language: "Hebrew",
+    ruleType: "Encryption Exemption",
+    active,
+  });
 
   it("passes when no attachments", () => {
     const r = runCheck1({ ...base, attachments: [] });
@@ -168,6 +178,48 @@ describe("runCheck1", () => {
           expiryDate: "2020-01-01T00:00:00Z",
         }),
       ],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)],
+    });
+    expect(r.severity).toBe("BLOCK");
+  });
+
+  it("EXEMPTS encryption when subject matches a rule (substring, case-insensitive)", () => {
+    const r = runCheck1({
+      ...base,
+      subject: "מצורף בזאת חשבונית ספק לחודש מאי",
+      rules: [rule("חשבונית ספק")],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)], // unencrypted, would normally block
+    });
+    expect(r.isValid).toBe(true);
+    expect(r.message).toContain("פטור מהצפנה לפי חוק");
+    expect((r.details as { encryptionExemptExpression?: string }).encryptionExemptExpression).toBe("חשבונית ספק");
+  });
+
+  it("EXEMPTS via case-insensitive English substring", () => {
+    const r = runCheck1({
+      ...base,
+      subject: "Please find attached the AR INVOICE",
+      rules: [rule("AR Invoice")],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)],
+    });
+    expect(r.isValid).toBe(true);
+  });
+
+  it("does NOT exempt when the rule is inactive", () => {
+    const r = runCheck1({
+      ...base,
+      subject: "חשבונית ספק",
+      rules: [rule("חשבונית ספק", false)],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)],
+    });
+    expect(r.severity).toBe("BLOCK");
+  });
+
+  it("does NOT exempt when subject has no matching rule (fail-safe with empty rules)", () => {
+    const r = runCheck1({
+      ...base,
+      subject: "unrelated subject",
+      rules: [],
       attachments: [attachment("payroll.xlsx", headerZipPlain)],
     });
     expect(r.severity).toBe("BLOCK");

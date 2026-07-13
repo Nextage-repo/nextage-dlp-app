@@ -149,6 +149,17 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
       .then((t) => new AuditService(t).writeAudit(emailData, result))
       .catch(() => {});
 
+    // Log "חוקים" encryption exemption if the subject matched a rule.
+    const exemption = result.results.find(
+      (r) => r.check === 1 && !!(r.details as { encryptionExemptExpression?: string })?.encryptionExemptExpression,
+    );
+    if (exemption) {
+      const expr = (exemption.details as { encryptionExemptExpression?: string }).encryptionExemptExpression!;
+      authService.getTokenSilent()
+        .then((t) => new AuditService(t).recordExemption(emailData, expr))
+        .catch(() => {});
+    }
+
     if (result.shouldBlock) {
       console.log("[OnSend] BLOCKING send");
       const issueMessages = result.results
