@@ -24,6 +24,7 @@ import {
   OFFICE_EXTENSIONS_REGEX,
   PDF_EXTENSION_REGEX,
   SAFE_MODE,
+  TEXT_EXTENSIONS_REGEX,
 } from "../shared/constants";
 import { getUserPermission } from "./shared";
 import { findEncryptionExemption } from "./rules-exemption";
@@ -83,7 +84,10 @@ export function runCheck1(input: Check1Input): CheckResult {
   for (const att of attachments) {
     // Images are always skipped
     if (IMAGE_EXTENSIONS_REGEX.test(att.name)) continue;
-    // ZIP/RAR/7Z are always considered encrypted (spec appendix)
+    // Plain text never requires encryption
+    if (TEXT_EXTENSIONS_REGEX.test(att.name)) continue;
+    // RAR/7Z are always considered encrypted (no detection implemented yet).
+    // .zip is NOT skipped here — classify() inspects its real encryption bit.
     if (ARCHIVE_EXTENSIONS_REGEX.test(att.name)) continue;
     const status = classify(att);
     if (status === "UNENCRYPTED") unencrypted.push(att.name);
@@ -101,7 +105,7 @@ export function runCheck1(input: Check1Input): CheckResult {
       severity,
       message:
         `לא ניתן לאמת הצפנה עבור: ${unverifiable.join(", ")}. ` +
-        `נסה לשלוח ממחשב שולחני או צור קשר עם IT.${note}`,
+        `צור קשר עם IT.${note}`,
       details: { unverifiableFiles: unverifiable },
     };
   }

@@ -235,4 +235,22 @@ describe("runCheck1", () => {
     });
     expect(r.isValid).toBe(true);
   });
+
+  it("skips .txt attachments (never require encryption)", () => {
+    const r = runCheck1({
+      ...base,
+      attachments: [attachment("notes.txt", null)],
+    });
+    expect(r.isValid).toBe(true);
+  });
+
+  it("skips .txt even when other attachments are unencrypted (txt itself never flagged)", () => {
+    const r = runCheck1({
+      ...base,
+      attachments: [attachment("notes.txt", null), attachment("payroll.xlsx", headerZipPlain)],
+    });
+    expect(r.severity).toBe("BLOCK");
+    expect(r.message).toContain("payroll.xlsx");
+    expect(r.message).not.toContain("notes.txt");
+  });
 });

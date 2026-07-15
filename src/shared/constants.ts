@@ -30,8 +30,14 @@ export const MAGIC_BYTES = {
 // Image extensions — skipped in Check 1 (cannot be encrypted by extension)
 export const IMAGE_EXTENSIONS_REGEX = /\.(png|jpg|jpeg|gif|bmp|webp|svg|ico)$/i;
 
-// Archive extensions — assumed encrypted (cannot be verified easily)
-export const ARCHIVE_EXTENSIONS_REGEX = /\.(zip|rar|7z)$/i;
+// Plain text — skipped in Check 1 (never requires encryption)
+export const TEXT_EXTENSIONS_REGEX = /\.txt$/i;
+
+// RAR/7Z — no internal-structure encryption check implemented yet, so these
+// are still assumed encrypted. .zip is EXCLUDED here on purpose: Check 1 now
+// inspects the real ZIP local-file-header bit-0 flag via classify() instead
+// of trusting the extension (see check1-encryption.ts).
+export const ARCHIVE_EXTENSIONS_REGEX = /\.(rar|7z)$/i;
 
 // Office file extensions (modern ZIP-based formats)
 export const OFFICE_EXTENSIONS_REGEX = /\.(xlsx|docx|pptx)$/i;
