@@ -101,6 +101,26 @@ export class ConfigService {
           }))
       : [];
 
-    return { customers, advisors, exemptions, exclusions, rules };
+    const roles = Array.isArray(raw.roles)
+      ? raw.roles
+          .filter((r: any) => r.active !== false)
+          .map((r: any) => ({
+            id: String(r.id),
+            roleName: r.role_name ?? r.roleName ?? "",
+            assignedEmails: Array.isArray(r.assigned_emails)
+              ? r.assigned_emails
+              : Array.isArray(r.assignedEmails)
+                ? r.assignedEmails
+                : [],
+            bypassChecks: Array.isArray(r.bypass_checks)
+              ? r.bypass_checks.map((n: any) => Number(n))
+              : Array.isArray(r.bypassChecks)
+                ? r.bypassChecks.map((n: any) => Number(n))
+                : [],
+            active: r.active !== false,
+          }))
+      : [];
+
+    return { customers, advisors, exemptions, exclusions, rules, roles };
   }
 }

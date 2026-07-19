@@ -1,10 +1,35 @@
 // Helpers shared between Check 1/2/3. Kept here so a new check can reuse them
 // without coupling sibling validator files together.
 
-import { Customer, Exemption, ExemptionType } from "../models/customer.model";
+import { Customer, Exemption, ExemptionType, Role } from "../models/customer.model";
 import { INTERNAL_DOMAIN } from "../shared/constants";
 
 export type Permission = ExemptionType | "STANDARD";
+
+/**
+ * Returns the ACTIVE role that bypasses the given check for this sender, or null.
+ * A role bypasses a check when the sender's email is in `assignedEmails` (exact,
+ * case-insensitive) and `checkNumber` is listed in the role's `bypassChecks`.
+ * First match wins. Used e.g. by the CFO role to skip encryption (Check 1).
+ */
+export function getRoleBypass(
+  userEmail: string | undefined | null,
+  checkNumber: number,
+  roles: Role[] | undefined | null,
+): Role | null {
+  if (!userEmail || !Array.isArray(roles)) return null;
+  const target = userEmail.toLowerCase();
+  return (
+    roles.find(
+      (role) =>
+        role.active &&
+        Array.isArray(role.bypassChecks) &&
+        role.bypassChecks.includes(checkNumber) &&
+        Array.isArray(role.assignedEmails) &&
+        role.assignedEmails.some((e) => e != null && e.toLowerCase() === target),
+    ) ?? null
+  );
+}
 
 /**
  * Resolves the user's exemption permission. Returns "STANDARD" if no active

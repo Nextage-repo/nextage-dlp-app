@@ -110,6 +110,52 @@ describe("runCheck1", () => {
     active,
   });
 
+  const cfoRole = (emails: string[], active = true) => ({
+    id: "role-cfo",
+    roleName: "CFO",
+    assignedEmails: emails,
+    bypassChecks: [1],
+    active,
+  });
+
+  it("passes when the sender's role bypasses encryption (CFO)", () => {
+    const r = runCheck1({
+      ...base,
+      roles: [cfoRole(["sender@nextage.co.il"])],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)],
+    });
+    expect(r.isValid).toBe(true);
+    expect(r.message).toContain("CFO");
+  });
+
+  it("still BLOCKs when the sender is NOT assigned to the CFO role", () => {
+    const r = runCheck1({
+      ...base,
+      roles: [cfoRole(["someone-else@nextage.co.il"])],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)],
+    });
+    expect(r.severity).toBe("BLOCK");
+  });
+
+  it("does NOT bypass when the role is inactive", () => {
+    const r = runCheck1({
+      ...base,
+      roles: [cfoRole(["sender@nextage.co.il"], false)],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)],
+    });
+    expect(r.severity).toBe("BLOCK");
+  });
+
+  it("matches role assignment case-insensitively", () => {
+    const r = runCheck1({
+      ...base,
+      userEmail: "Sender@Nextage.co.il",
+      roles: [cfoRole(["sender@nextage.co.il"])],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)],
+    });
+    expect(r.isValid).toBe(true);
+  });
+
   it("passes when no attachments", () => {
     const r = runCheck1({ ...base, attachments: [] });
     expect(r.isValid).toBe(true);

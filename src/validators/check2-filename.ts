@@ -3,9 +3,9 @@
 // Token matching uses word boundaries so a customer alias of "CC" doesn't
 // accidentally match the filename "account_ccharge_2024.xlsx".
 
-import { Customer, Exemption } from "../models/customer.model";
+import { Customer, Exemption, Role } from "../models/customer.model";
 import { AttachmentWithHeader, CheckResult } from "../models/dlp-result.model";
-import { findCustomersInRecipients, getUserPermission } from "./shared";
+import { findCustomersInRecipients, getRoleBypass, getUserPermission } from "./shared";
 
 export interface Check2Input {
   attachments: AttachmentWithHeader[];
@@ -13,14 +13,20 @@ export interface Check2Input {
   userEmail: string;
   customers: Customer[];
   exemptions: Exemption[];
+  roles?: Role[];
 }
 
 export function runCheck2(input: Check2Input): CheckResult {
-  const { attachments, recipients, userEmail, customers, exemptions } = input;
+  const { attachments, recipients, userEmail, customers, exemptions, roles } = input;
 
   const permission = getUserPermission(userEmail, exemptions);
   if (permission === "ALL_CHECKS" || permission === "CHECK_2_BYPASS") {
     return pass("המשתמש פטור מבדיקת שם קובץ");
+  }
+
+  const roleBypass = getRoleBypass(userEmail, 2, roles);
+  if (roleBypass) {
+    return pass(`פטור מבדיקת שם קובץ לפי תפקיד: ${roleBypass.roleName}`);
   }
 
   if (attachments.length === 0) {

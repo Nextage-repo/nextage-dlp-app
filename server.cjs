@@ -58,6 +58,13 @@ async function initDB() {
         rule_type TEXT NOT NULL DEFAULT 'Encryption Exemption',
         active BOOLEAN NOT NULL DEFAULT TRUE
       );
+      CREATE TABLE IF NOT EXISTS roles (
+        id SERIAL PRIMARY KEY,
+        role_name TEXT NOT NULL,
+        assigned_emails TEXT[] NOT NULL DEFAULT '{}',
+        bypass_checks INT[] NOT NULL DEFAULT '{}',
+        active BOOLEAN NOT NULL DEFAULT TRUE
+      );
     `);
 
     // Seed the "חוקים" rules list once (only if empty).
@@ -80,6 +87,18 @@ async function initDB() {
         );
       }
       console.log("✅ Seeded rules (חוקים) with " + seed.length + " expressions");
+    }
+
+    // Seed the "תפקידים" roles list once (only if empty). First role: CFO,
+    // which bypasses ONLY the encryption check (bypass_checks = {1}). Emails are
+    // assigned per deployment via the admin panel, so seed with an empty list.
+    const roleCount = await pool.query("SELECT COUNT(*)::int AS n FROM roles");
+    if (roleCount.rows[0].n === 0) {
+      await pool.query(
+        "INSERT INTO roles (role_name, assigned_emails, bypass_checks, active) VALUES ($1, $2, $3, TRUE)",
+        ["CFO", [], [1]],
+      );
+      console.log("✅ Seeded roles (תפקידים) with the CFO role (skips encryption)");
     }
     console.log("✅ Database tables ready");
   } catch (err) {
@@ -239,6 +258,42 @@ app.delete("/api/admin/rules/:id", adminAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Roles (תפקידים) — named policies (e.g. CFO) that bypass specific checks per email
+function normalizeEmails(v) {
+  if (Array.isArray(v)) return v.map((s) => String(s).trim()).filter(Boolean);
+  if (typeof v === "string")
+    return v.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
+  return [];
+}
+function normalizeChecks(v) {
+  const arr = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,;\s]+/) : [];
+  return arr.map((n) => parseInt(n, 10)).filter((n) => n === 1 || n === 2 || n === 3);
+}
+app.get("/api/admin/roles", adminAuth, async (req, res) => {
+  const r = await pool.query("SELECT * FROM roles ORDER BY id");
+  res.json(r.rows);
+});
+app.post("/api/admin/roles", adminAuth, async (req, res) => {
+  const { role_name, assigned_emails, bypass_checks, active } = req.body;
+  const r = await pool.query(
+    "INSERT INTO roles (role_name, assigned_emails, bypass_checks, active) VALUES ($1, $2, $3, $4) RETURNING *",
+    [role_name, normalizeEmails(assigned_emails), normalizeChecks(bypass_checks), active !== false]
+  );
+  res.json(r.rows[0]);
+});
+app.put("/api/admin/roles/:id", adminAuth, async (req, res) => {
+  const { role_name, assigned_emails, bypass_checks, active } = req.body;
+  const r = await pool.query(
+    "UPDATE roles SET role_name=$1, assigned_emails=$2, bypass_checks=$3, active=$4 WHERE id=$5 RETURNING *",
+    [role_name, normalizeEmails(assigned_emails), normalizeChecks(bypass_checks), active !== false, req.params.id]
+  );
+  res.json(r.rows[0]);
+});
+app.delete("/api/admin/roles/:id", adminAuth, async (req, res) => {
+  await pool.query("DELETE FROM roles WHERE id=$1", [req.params.id]);
+  res.json({ ok: true });
+});
+
 // Audit log (read only)
 app.get("/api/admin/audit", adminAuth, async (req, res) => {
   const r = await pool.query("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200");
@@ -335,6 +390,7 @@ app.get("/admin", (req, res) => {
     <button onclick="showTab('exemptions',this)">✅ פטורים</button>
     <button onclick="showTab('exclusions',this)">📎 סיומות קבצים</button>
     <button onclick="showTab('rules',this)">📜 חוקים</button>
+    <button onclick="showTab('roles',this)">🎫 תפקידים</button>
     <button onclick="showTab('audit',this)">📋 לוג ביקורת</button>
   </nav>
   <main>
@@ -396,6 +452,18 @@ app.get("/admin", (req, res) => {
         </div>
         <table><thead><tr><th>ביטוי</th><th>שפה</th><th>סוג חוק</th><th>פעיל</th><th>פעולות</th></tr></thead>
         <tbody id="table-rules"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ROLES (תפקידים) -->
+    <div class="section" id="section-roles">
+      <div class="card">
+        <div class="card-header">
+          <h2>תפקידים — פטור מבדיקות לפי תפקיד המשתמש</h2>
+          <button class="btn btn-success btn-sm" onclick="openModal('roles')">+ הוסף תפקיד</button>
+        </div>
+        <table><thead><tr><th>שם תפקיד</th><th>אימיילים משויכים</th><th>בדיקות שמדולגות</th><th>פעיל</th><th>פעולות</th></tr></thead>
+        <tbody id="table-roles"></tbody></table>
       </div>
     </div>
 
@@ -507,6 +575,16 @@ async function loadTable(name) {
         <button class="btn btn-primary btn-sm" onclick='editRow("rules",\${JSON.stringify(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("rules",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
+  } else if (name === "roles") {
+    tbody.innerHTML = data.map(r => \`<tr>
+      <td><strong>\${r.role_name}</strong></td>
+      <td>\${(r.assigned_emails||[]).map(e=>\`<span class="tag">\${e}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
+      <td>\${(r.bypass_checks||[]).map(c=>\`<span class="tag tag-gray">\${checkLabel(c)}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
+      <td>\${r.active ? '<span class="tag tag-green">פעיל</span>' : '<span class="tag tag-gray">לא פעיל</span>'}</td>
+      <td class="actions">
+        <button class="btn btn-primary btn-sm" onclick='editRow("roles",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("roles",\${r.id})'>🗑️</button>
+      </td></tr>\`).join("");
   } else if (name === "audit") {
     tbody.innerHTML = data.map(r => \`<tr>
       <td class="audit-time">\${new Date(r.created_at).toLocaleString("he-IL")}</td>
@@ -515,6 +593,10 @@ async function loadTable(name) {
       <td style="font-size:12px;color:#888">\${r.data ? JSON.stringify(r.data).substring(0,80) : ""}</td>
       </tr>\`).join("");
   }
+}
+
+function checkLabel(n) {
+  return { 1: "1 · הצפנה", 2: "2 · שם קובץ", 3: "3 · נושא ודומיין" }[n] || String(n);
 }
 
 function openModal(table, row) {
@@ -528,7 +610,7 @@ function openModal(table, row) {
 function editRow(table, row) { openModal(table, row); }
 
 function tableLabel(t) {
-  return { customers:"לקוח", advisors:"יועץ", exemptions:"פטור", exclusions:"סיומת", rules:"חוק" }[t] || t;
+  return { customers:"לקוח", advisors:"יועץ", exemptions:"פטור", exclusions:"סיומת", rules:"חוק", roles:"תפקיד" }[t] || t;
 }
 
 function buildForm(table, row) {
@@ -580,6 +662,24 @@ function buildForm(table, row) {
         <option value="true" \${row?.active!==false?"selected":""}>כן</option>
         <option value="false" \${row?.active===false?"selected":""}>לא</option>
       </select></div>\`;
+  if (table === "roles") { const bc = row?.bypass_checks || []; return \`
+    <div class="form-group"><label>שם תפקיד</label>
+      <input id="f-role-name" value="\${row?.role_name||""}" placeholder="CFO"/></div>
+    <div class="form-group"><label>אימיילים משויכים</label>
+      <input id="f-assigned-emails" value="\${(row?.assigned_emails||[]).join(", ")}" placeholder="cfo@nextage.co.il, name@nextage.co.il"/>
+      <small>כתובות המייל שמשויכות לתפקיד — הפרד בפסיק</small></div>
+    <div class="form-group"><label>בדיקות שמדולגות</label>
+      <div style="display:flex;gap:16px;padding:4px 0">
+        <label style="font-weight:400"><input type="checkbox" id="f-check-1" \${bc.includes(1)?"checked":""}/> 1 · הצפנה</label>
+        <label style="font-weight:400"><input type="checkbox" id="f-check-2" \${bc.includes(2)?"checked":""}/> 2 · שם קובץ</label>
+        <label style="font-weight:400"><input type="checkbox" id="f-check-3" \${bc.includes(3)?"checked":""}/> 3 · נושא ודומיין</label>
+      </div>
+      <small>מי שמשויך לתפקיד ידלג על הבדיקות המסומנות. CFO = הצפנה בלבד.</small></div>
+    <div class="form-group"><label>פעיל</label>
+      <select id="f-active">
+        <option value="true" \${row?.active!==false?"selected":""}>כן</option>
+        <option value="false" \${row?.active===false?"selected":""}>לא</option>
+      </select></div>\`; }
 }
 
 function getFormData(table) {
@@ -608,6 +708,18 @@ function getFormData(table) {
     rule_type: document.getElementById("f-rule-type").value.trim() || "Encryption Exemption",
     active: document.getElementById("f-active").value === "true"
   };
+  if (table === "roles") {
+    const checks = [];
+    if (document.getElementById("f-check-1").checked) checks.push(1);
+    if (document.getElementById("f-check-2").checked) checks.push(2);
+    if (document.getElementById("f-check-3").checked) checks.push(3);
+    return {
+      role_name: document.getElementById("f-role-name").value.trim(),
+      assigned_emails: document.getElementById("f-assigned-emails").value.split(",").map(d=>d.trim()).filter(Boolean),
+      bypass_checks: checks,
+      active: document.getElementById("f-active").value === "true"
+    };
+  }
 }
 
 async function saveModal() {
@@ -645,12 +757,13 @@ function toast(msg) {
 // Config endpoint — reads from PostgreSQL
 app.get("/api/config", async (req, res) => {
   try {
-    const [customers, advisors, exemptions, exclusions, rules] = await Promise.all([
+    const [customers, advisors, exemptions, exclusions, rules, roles] = await Promise.all([
       pool.query("SELECT * FROM customers"),
       pool.query("SELECT * FROM advisors"),
       pool.query("SELECT * FROM exemptions"),
       pool.query("SELECT * FROM exclusions"),
       pool.query("SELECT * FROM rules WHERE active = TRUE"),
+      pool.query("SELECT * FROM roles WHERE active = TRUE"),
     ]);
 
     res.json({
@@ -659,6 +772,7 @@ app.get("/api/config", async (req, res) => {
       exemptions: exemptions.rows,
       exclusions: exclusions.rows,
       rules: rules.rows,
+      roles: roles.rows,
     });
   } catch (err) {
     console.error("[Config] DB error:", err.message);

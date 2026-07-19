@@ -15,7 +15,7 @@ import {
   AttachmentWithHeader,
   CheckResult,
 } from "../models/dlp-result.model";
-import { Exclusion, Exemption, Rule } from "../models/customer.model";
+import { Exclusion, Exemption, Role, Rule } from "../models/customer.model";
 import {
   ARCHIVE_EXTENSIONS_REGEX,
   IMAGE_EXTENSIONS_REGEX,
@@ -26,7 +26,7 @@ import {
   SAFE_MODE,
   TEXT_EXTENSIONS_REGEX,
 } from "../shared/constants";
-import { getUserPermission } from "./shared";
+import { getRoleBypass, getUserPermission } from "./shared";
 import { findEncryptionExemption } from "./rules-exemption";
 
 export interface Check1Input {
@@ -37,17 +37,24 @@ export interface Check1Input {
   exemptions: Exemption[];
   subject: string;
   rules: Rule[];
+  roles?: Role[];
 }
 
 type EncryptionStatus = "ENCRYPTED" | "UNENCRYPTED" | "UNVERIFIABLE";
 
 export function runCheck1(input: Check1Input): CheckResult {
-  const { attachments, recipients, userEmail, exclusions, exemptions, subject, rules } = input;
+  const { attachments, recipients, userEmail, exclusions, exemptions, subject, rules, roles } = input;
 
   // 1. User exemption
   const permission = getUserPermission(userEmail, exemptions);
   if (permission === "ALL_CHECKS" || permission === "CHECK_1_ONLY") {
     return pass("המשתמש פטור מבדיקת הצפנה");
+  }
+
+  // 1b. Role bypass (e.g. CFO): the sender's role skips the encryption check.
+  const roleBypass = getRoleBypass(userEmail, 1, roles);
+  if (roleBypass) {
+    return pass(`פטור מהצפנה לפי תפקיד: ${roleBypass.roleName}`);
   }
 
   // 2. All internal recipients

@@ -61,10 +61,25 @@ export interface Rule {
   active: boolean;
 }
 
+// "תפקידים" (Roles) — a named policy assigned to one or more sender emails. A role
+// bypasses the checks listed in `bypassChecks` for anyone whose email is assigned to
+// it. First role: CFO, which bypasses ONLY the encryption check ([1]) — a CFO can send
+// unencrypted files, while filename (Check 2) and subject/domain (Check 3) still run.
+// Distinct from `Exemption` (per-email) — a Role defines the policy once and is shared
+// across many emails, and from `Rule` (subject-matched). Note: Role ≠ Rule.
+export interface Role {
+  id: string;
+  roleName: string;
+  assignedEmails: string[];
+  bypassChecks: number[]; // which checks this role skips, e.g. [1] = encryption only
+  active: boolean;
+}
+
 export interface DLPConfig {
   customers: Customer[];
   advisors: Advisor[];
   exemptions: Exemption[];
   exclusions: Exclusion[];
   rules: Rule[];
+  roles: Role[];
 }

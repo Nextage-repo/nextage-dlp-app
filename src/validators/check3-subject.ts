@@ -2,10 +2,10 @@
 // BLOCK: unknown recipient domain OR subject missing identified customer name
 // WARNING: advisor-only recipient + subject missing linked customer
 
-import { Advisor, Customer, Exclusion, Exemption } from "../models/customer.model";
+import { Advisor, Customer, Exclusion, Exemption, Role } from "../models/customer.model";
 import { CheckResult } from "../models/dlp-result.model";
 import { INTERNAL_DOMAIN, SAFE_MODE } from "../shared/constants";
-import { findCustomersInRecipients, getUserPermission } from "./shared";
+import { findCustomersInRecipients, getRoleBypass, getUserPermission } from "./shared";
 
 export interface Check3Input {
   subject: string;
@@ -15,14 +15,20 @@ export interface Check3Input {
   advisors: Advisor[];
   exemptions: Exemption[];
   exclusions: Exclusion[];
+  roles?: Role[];
 }
 
 export function runCheck3(input: Check3Input): CheckResult {
-  const { subject, recipients, userEmail, customers, advisors, exemptions, exclusions } = input;
+  const { subject, recipients, userEmail, customers, advisors, exemptions, exclusions, roles } = input;
 
   const permission = getUserPermission(userEmail, exemptions);
   if (permission === "ALL_CHECKS" || permission === "CHECK_3_BYPASS") {
     return pass("המשתמש פטור מבדיקת נושא");
+  }
+
+  const roleBypass = getRoleBypass(userEmail, 3, roles);
+  if (roleBypass) {
+    return pass(`פטור מבדיקת נושא לפי תפקיד: ${roleBypass.roleName}`);
   }
 
   // Internal-only emails skip all subject checks

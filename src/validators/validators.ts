@@ -35,6 +35,7 @@ export class DLPValidator {
       exemptions: this.config.exemptions,
       subject: email.subject,
       rules: this.config.rules,
+      roles: this.config.roles,
     });
 
     const check2 = runCheck2({
@@ -43,6 +44,7 @@ export class DLPValidator {
       userEmail: email.userEmail,
       customers: this.config.customers,
       exemptions: this.config.exemptions,
+      roles: this.config.roles,
     });
 
     const check3 = runCheck3({
@@ -53,6 +55,7 @@ export class DLPValidator {
       advisors: this.config.advisors,
       exemptions: this.config.exemptions,
       exclusions: this.config.exclusions,
+      roles: this.config.roles,
     });
 
     const results = [check1, check2, check3];

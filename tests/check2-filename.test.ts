@@ -86,4 +86,33 @@ describe("runCheck2 (filename matching)", () => {
     });
     expect(r.isValid).toBe(true);
   });
+
+  it("a role that bypasses ONLY check 1 (CFO) does NOT bypass check 2", () => {
+    const r = runCheck2({
+      attachments: [attachment("Unrelated.xlsx", headerZipPlain)],
+      recipients: ["finance@acme.com"],
+      userEmail: "sender@nextage.co.il",
+      customers: [matchingCustomer],
+      exemptions: [],
+      roles: [
+        { id: "role-cfo", roleName: "CFO", assignedEmails: ["sender@nextage.co.il"], bypassChecks: [1], active: true },
+      ],
+    });
+    expect(r.severity).toBe("WARNING");
+  });
+
+  it("a role whose bypassChecks includes 2 bypasses check 2", () => {
+    const r = runCheck2({
+      attachments: [attachment("Unrelated.xlsx", headerZipPlain)],
+      recipients: ["finance@acme.com"],
+      userEmail: "sender@nextage.co.il",
+      customers: [matchingCustomer],
+      exemptions: [],
+      roles: [
+        { id: "role-x", roleName: "Auditor", assignedEmails: ["sender@nextage.co.il"], bypassChecks: [2], active: true },
+      ],
+    });
+    expect(r.isValid).toBe(true);
+    expect(r.message).toContain("Auditor");
+  });
 });
