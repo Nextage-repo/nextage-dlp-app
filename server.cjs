@@ -109,7 +109,12 @@ async function initDB() {
   }
 }
 
-app.use(express.json());
+// Parse JSON bodies. IMPORTANT: also parse "text/plain" — the add-in posts audit
+// entries with Content-Type: text/plain so the request stays a CORS "simple"
+// request (Classic Outlook's JS-only send runtime cannot complete a preflight).
+// With the default (application/json only) those bodies were dropped, so audit
+// rows were written with null user/action and empty data.
+app.use(express.json({ type: ["application/json", "text/plain"] }));
 app.use(express.static(path.join(__dirname, "dist")));
 
 // CORS headers

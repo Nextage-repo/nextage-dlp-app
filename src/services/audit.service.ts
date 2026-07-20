@@ -110,7 +110,8 @@ export class AuditService {
   private async postEntry(entry: AuditEntry): Promise<void> {
     // Use text/plain (a CORS "simple" content type) and no Authorization header
     // so the POST skips the preflight OPTIONS. Classic Outlook's JS-only runtime
-    // cannot complete a preflight; the server parses the JSON body regardless.
+    // cannot complete a preflight. The server's body parser is configured to parse
+    // text/plain as JSON (express.json({ type: [...] })), so the entry is persisted.
     void this.accessToken;
     await postJson(`${API_BASE_URL}/audit`, { "Content-Type": "text/plain" }, entry, API_TIMEOUT_MS);
   }
