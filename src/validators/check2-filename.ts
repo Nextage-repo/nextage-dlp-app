@@ -5,6 +5,7 @@
 
 import { Customer, Exemption, Role } from "../models/customer.model";
 import { AttachmentWithHeader, CheckResult } from "../models/dlp-result.model";
+import { IMAGE_EXTENSIONS_REGEX } from "../shared/constants";
 import { findCustomersInRecipients, getRoleBypass, getUserPermission } from "./shared";
 
 export interface Check2Input {
@@ -29,7 +30,15 @@ export function runCheck2(input: Check2Input): CheckResult {
     return pass(`פטור מבדיקת שם קובץ לפי תפקיד: ${roleBypass.roleName}`);
   }
 
-  if (attachments.length === 0) {
+  // Only real document attachments count. Inline images (signature logos, images
+  // pasted into the body) and standalone image files aren't "documents sent to a
+  // customer" — counting them caused a false "no file matches customer" warning on
+  // a plain reply that only carries a signature logo. Check 1 likewise skips images.
+  const realAttachments = attachments.filter(
+    (a) => !a.isInline && !IMAGE_EXTENSIONS_REGEX.test(a.name),
+  );
+
+  if (realAttachments.length === 0) {
     return pass("אין קבצים מצורפים");
   }
 
@@ -48,7 +57,7 @@ export function runCheck2(input: Check2Input): CheckResult {
     const tokens = [c.customerName.toLowerCase(), ...c.aliases.map((a) => a.toLowerCase())].filter(
       (t) => t.length > 0,
     );
-    const covered = attachments.some((a) => nameMatchesAnyToken(a.name, tokens));
+    const covered = realAttachments.some((a) => nameMatchesAnyToken(a.name, tokens));
     if (!covered) uncovered.push(c.customerName);
   }
 

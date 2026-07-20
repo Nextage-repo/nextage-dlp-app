@@ -115,4 +115,43 @@ describe("runCheck2 (filename matching)", () => {
     expect(r.isValid).toBe(true);
     expect(r.message).toContain("Auditor");
   });
+
+  it("ignores an inline signature logo — a reply with no real file to a customer passes", () => {
+    // Regression: a plain reply carrying only the signature logo (inline image)
+    // must NOT warn "no file matches customer".
+    const r = runCheck2({
+      attachments: [attachment("image001.png", null, { isInline: true })],
+      recipients: ["finance@acme.com"],
+      userEmail: "sender@nextage.co.il",
+      customers: [matchingCustomer],
+      exemptions: [],
+    });
+    expect(r.isValid).toBe(true);
+    expect(r.message).toBe("אין קבצים מצורפים");
+  });
+
+  it("ignores a standalone image attachment (not a document that needs a customer name)", () => {
+    const r = runCheck2({
+      attachments: [attachment("photo.jpg", null)],
+      recipients: ["finance@acme.com"],
+      userEmail: "sender@nextage.co.il",
+      customers: [matchingCustomer],
+      exemptions: [],
+    });
+    expect(r.isValid).toBe(true);
+  });
+
+  it("still WARNS on a real mismatched document even when an inline logo is present", () => {
+    const r = runCheck2({
+      attachments: [
+        attachment("image001.png", null, { isInline: true }),
+        attachment("Unrelated_file.xlsx", headerZipPlain),
+      ],
+      recipients: ["finance@acme.com"],
+      userEmail: "sender@nextage.co.il",
+      customers: [matchingCustomer],
+      exemptions: [],
+    });
+    expect(r.severity).toBe("WARNING");
+  });
 });
