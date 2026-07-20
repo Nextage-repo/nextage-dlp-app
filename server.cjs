@@ -783,10 +783,25 @@ app.get("/api/config", async (req, res) => {
 // Audit endpoint
 app.post("/api/audit", async (req, res) => {
   try {
-    const { userEmail, action, data } = req.body;
+    const b = req.body || {};
+    // The client sends a rich entry (recipients, subject, attachments, severity,
+    // check, result). Previously only `data` was persisted, and block/warning
+    // entries don't set `data` — so the מידע column was always empty. Fall back to
+    // assembling a detail object from the entry fields so the log is useful.
+    const data =
+      b.data !== undefined && b.data !== null
+        ? b.data
+        : {
+            check: b.checkNumber,
+            result: b.result,
+            severity: b.severity,
+            subject: b.messageSubject,
+            recipients: b.recipientEmails,
+            attachments: b.attachmentNames,
+          };
     await pool.query(
       "INSERT INTO audit_log (user_email, action, data) VALUES ($1, $2, $3)",
-      [userEmail, action, JSON.stringify(data)]
+      [b.userEmail, b.action, JSON.stringify(data)]
     );
     res.json({ ok: true });
   } catch (err) {

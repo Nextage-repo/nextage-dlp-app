@@ -9,16 +9,19 @@ import { createId } from "../shared/id";
 export class AuditService {
   constructor(private readonly accessToken: string) {}
 
-  writeAudit(email: EmailData, result: DLPResult): void {
+  // Returns a promise that resolves once all entries have been POSTed. The OnSend
+  // caller MUST await this before event.completed(): Classic Outlook's JS-only send
+  // runtime tears down after event.completed() and kills any in-flight request, so a
+  // fire-and-forget write never reaches the server. Never rejects (uses allSettled).
+  async writeAudit(email: EmailData, result: DLPResult): Promise<void> {
     const entries = this.buildEntries(email, result);
-    entries.forEach((entry) => {
-      this.postEntry(entry).catch((err) => {
-        console.warn("[Audit] write failed:", err);
-      });
+    const outcomes = await Promise.allSettled(entries.map((entry) => this.postEntry(entry)));
+    outcomes.forEach((o) => {
+      if (o.status === "rejected") console.warn("[Audit] write failed:", o.reason);
     });
   }
 
-  recordUnavailable(reason: string, partialEmail?: Partial<EmailData>): void {
+  async recordUnavailable(reason: string, partialEmail?: Partial<EmailData>): Promise<void> {
     const entry: AuditEntry = {
       id: createId(),
       partitionKey: partialEmail?.userEmail ?? "unknown",
@@ -34,13 +37,13 @@ export class AuditService {
       ttl: AUDIT_TTL_SECONDS,
     };
 
-    this.postEntry({ ...entry, details: { reason } } as AuditEntry & { details: { reason: string } })
+    await this.postEntry({ ...entry, details: { reason } } as AuditEntry & { details: { reason: string } })
       .catch((err) => console.warn("[Audit] unavailable-event write failed:", err));
   }
 
   // Logs a "חוקים" encryption exemption: the subject matched a rule expression,
   // so Check 1 (encryption) was skipped for this email.
-  recordExemption(email: EmailData, expression: string): void {
+  async recordExemption(email: EmailData, expression: string): Promise<void> {
     const entry: AuditEntry = {
       id: createId(),
       partitionKey: email.userEmail,
@@ -56,7 +59,7 @@ export class AuditService {
       ttl: AUDIT_TTL_SECONDS,
     };
     // `data` is what the server persists (JSONB) — include the matched expression.
-    this.postEntry({
+    await this.postEntry({
       ...entry,
       data: { type: "ENCRYPTION_EXEMPT", expression, subject: email.subject, recipients: email.recipients },
     } as AuditEntry & { data: unknown })

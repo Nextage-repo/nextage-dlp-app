@@ -3,7 +3,7 @@
 // Office.js Mailbox API 1.14 required.
 
 import { DLPConfig } from "../models/customer.model";
-import { EmailData, RecipientInfo } from "../models/dlp-result.model";
+import { DLPResult, EmailData, RecipientInfo } from "../models/dlp-result.model";
 import { AuditService } from "../services/audit.service";
 import { authService } from "../services/auth.service";
 import { ConfigService } from "../services/config.service";
@@ -144,21 +144,11 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
     const validator = new DLPValidator(config);
     const result = await validator.runAllChecks(emailData);
 
-    // Audit log (fire-and-forget; never blocks send)
-    authService.getTokenSilent()
-      .then((t) => new AuditService(t).writeAudit(emailData, result))
-      .catch(() => {});
-
-    // Log "חוקים" encryption exemption if the subject matched a rule.
-    const exemption = result.results.find(
-      (r) => r.check === 1 && !!(r.details as { encryptionExemptExpression?: string })?.encryptionExemptExpression,
-    );
-    if (exemption) {
-      const expr = (exemption.details as { encryptionExemptExpression?: string }).encryptionExemptExpression!;
-      authService.getTokenSilent()
-        .then((t) => new AuditService(t).recordExemption(emailData, expr))
-        .catch(() => {});
-    }
+    // Audit log — MUST be awaited before event.completed(). In Classic Outlook's
+    // JS-only send runtime the process is torn down once event.completed() fires,
+    // which killed the previous fire-and-forget POST (no entries were persisted).
+    // flushAudit swallows errors and is time-bounded so it never blocks the send.
+    await flushAudit(emailData, result);
 
     if (result.shouldBlock) {
       console.log("[OnSend] BLOCKING send");
@@ -223,11 +213,52 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
   } catch (err: unknown) {
     console.error("[OnSend] Critical error — failing open:", err);
     const reason = err instanceof Error ? err.message : "unknown error";
-    authService.getTokenSilent()
-      .then((t) => new AuditService(t).recordUnavailable(reason, partialEmail))
-      .catch(() => {});
+    // Awaited (bounded) so the record survives the runtime teardown; never rethrows.
+    await withTimeout(
+      authService
+        .getTokenSilent()
+        .then((t) => new AuditService(t).recordUnavailable(reason, partialEmail))
+        .catch((e) => console.warn("[OnSend] unavailable audit failed:", e)),
+      AUDIT_FLUSH_MS,
+    );
     event.completed({ allowEvent: true });
   }
+}
+
+// Max time the send will wait for audit writes. Audit normally completes in well
+// under a second; this cap ensures a slow/down audit endpoint can never hold up a
+// user's send. If it elapses, the send proceeds and that entry is simply lost.
+const AUDIT_FLUSH_MS = 3000;
+
+function withTimeout(p: Promise<unknown>, ms: number): Promise<void> {
+  return Promise.race([
+    p.then(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  ]);
+}
+
+// Writes all audit entries for this send and awaits their POSTs. Never throws.
+async function flushAudit(emailData: EmailData, result: DLPResult): Promise<void> {
+  const work = (async () => {
+    const token = await authService.getTokenSilent();
+    const audit = new AuditService(token);
+    const jobs: Promise<void>[] = [audit.writeAudit(emailData, result)];
+
+    // Log "חוקים" encryption exemption if the subject matched a rule.
+    const exemption = result.results.find(
+      (r) =>
+        r.check === 1 &&
+        !!(r.details as { encryptionExemptExpression?: string })?.encryptionExemptExpression,
+    );
+    if (exemption) {
+      const expr = (exemption.details as { encryptionExemptExpression?: string })
+        .encryptionExemptExpression!;
+      jobs.push(audit.recordExemption(emailData, expr));
+    }
+    await Promise.allSettled(jobs);
+  })().catch((e) => console.warn("[OnSend] audit flush failed:", e));
+
+  await withTimeout(work, AUDIT_FLUSH_MS);
 }
 
 // ============================================================================

@@ -122,8 +122,9 @@ async function runChecks(): Promise<void> {
     const validator = new DLPValidator(config);
     const result = await validator.runAllChecks(emailData);
 
-    // Audit log (fire-and-forget)
-    new AuditService(token).writeAudit(emailData, result);
+    // Audit log (fire-and-forget — the taskpane runs in a persistent WebView2 that
+    // is not torn down, so the POST completes without needing to be awaited here).
+    void new AuditService(token).writeAudit(emailData, result);
 
     displayResult("check1", result.results[0]);
     displayResult("check2", result.results[1]);
