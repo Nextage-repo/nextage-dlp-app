@@ -65,6 +65,9 @@ async function initDB() {
         bypass_checks INT[] NOT NULL DEFAULT '{}',
         active BOOLEAN NOT NULL DEFAULT TRUE
       );
+      -- Indexes keep the audit-log filters fast as the table grows (200+ users).
+      CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_user_email ON audit_log (user_email);
     `);
 
     // Seed the "חוקים" rules list once (only if empty).
@@ -294,10 +297,54 @@ app.delete("/api/admin/roles/:id", adminAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Audit log (read only)
+// Audit log (read only). Supports filtering by day and by user, plus paging.
+// The full history is always stored; these params control what is returned.
+//   ?date=YYYY-MM-DD  — only events on that calendar day (Israel time)
+//   ?user=<substring> — only rows whose user_email matches (case-insensitive)
+//   ?limit=&offset=   — paging (default 200; max 1000 per page)
+function buildAuditFilter(query) {
+  const where = [];
+  const params = [];
+  if (query.date) {
+    params.push(query.date);
+    // Compare in Israel local time so "a day" matches what the admin sees.
+    where.push(`(created_at AT TIME ZONE 'Asia/Jerusalem')::date = $${params.length}::date`);
+  }
+  if (query.user) {
+    params.push("%" + String(query.user).trim() + "%");
+    where.push(`user_email ILIKE $${params.length}`);
+  }
+  return { whereSql: where.length ? "WHERE " + where.join(" AND ") : "", params };
+}
+
 app.get("/api/admin/audit", adminAuth, async (req, res) => {
-  const r = await pool.query("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200");
+  const { whereSql, params } = buildAuditFilter(req.query);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  params.push(limit, offset);
+  const r = await pool.query(
+    `SELECT * FROM audit_log ${whereSql} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
+  );
   res.json(r.rows);
+});
+
+// CSV export of the filtered audit log (all matching rows, capped at 50k).
+app.get("/api/admin/audit.csv", adminAuth, async (req, res) => {
+  const { whereSql, params } = buildAuditFilter(req.query);
+  const r = await pool.query(
+    `SELECT created_at, user_email, action, data FROM audit_log ${whereSql} ORDER BY created_at DESC LIMIT 50000`,
+    params,
+  );
+  const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+  const lines = ["created_at,user_email,action,data"];
+  for (const row of r.rows) {
+    const data = typeof row.data === "string" ? row.data : JSON.stringify(row.data ?? "");
+    lines.push([esc(new Date(row.created_at).toISOString()), esc(row.user_email), esc(row.action), esc(data)].join(","));
+  }
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="audit-log.csv"');
+  res.send("﻿" + lines.join("\n")); // BOM so Excel reads Hebrew correctly
 });
 
 // Admin UI
@@ -470,9 +517,21 @@ app.get("/admin", (req, res) => {
     <!-- AUDIT LOG -->
     <div class="section" id="section-audit">
       <div class="card">
-        <div class="card-header"><h2>לוג ביקורת (200 אחרונים)</h2></div>
+        <div class="card-header">
+          <h2>לוג ביקורת</h2>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="date" id="audit-date" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px"/>
+            <input type="text" id="audit-user" placeholder="סינון לפי אימייל" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px" onkeydown="if(event.key==='Enter')applyAuditFilter()"/>
+            <button class="btn btn-primary btn-sm" onclick="applyAuditFilter()">🔍 סנן</button>
+            <button class="btn btn-sm" onclick="clearAuditFilter()">נקה</button>
+            <button class="btn btn-success btn-sm" onclick="exportAudit()">⬇️ ייצוא CSV</button>
+          </div>
+        </div>
         <table><thead><tr><th>זמן</th><th>משתמש</th><th>פעולה</th><th>מידע</th></tr></thead>
         <tbody id="table-audit"></tbody></table>
+        <div style="text-align:center;padding:16px">
+          <button class="btn btn-sm" id="audit-more" style="display:none" onclick="loadAudit(false)">טען עוד ↓</button>
+        </div>
       </div>
     </div>
 
@@ -517,6 +576,7 @@ function showTab(name, btn) {
   document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
   document.getElementById("section-" + name).classList.add("active");
   btn.classList.add("active");
+  if (name === "audit") { loadAudit(true); return; }
   loadTable(name);
 }
 
@@ -585,14 +645,77 @@ async function loadTable(name) {
         <button class="btn btn-primary btn-sm" onclick='editRow("roles",\${JSON.stringify(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("roles",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
-  } else if (name === "audit") {
-    tbody.innerHTML = data.map(r => \`<tr>
-      <td class="audit-time">\${new Date(r.created_at).toLocaleString("he-IL")}</td>
-      <td>\${r.user_email||""}</td>
-      <td class="audit-action">\${r.action||""}</td>
-      <td style="font-size:12px;color:#888">\${r.data ? JSON.stringify(r.data).substring(0,80) : ""}</td>
-      </tr>\`).join("");
   }
+}
+
+// ── Audit log: filter by day / user, paging, CSV export ──────────────────────
+let auditOffset = 0;
+const AUDIT_PAGE = 200;
+
+function auditQueryString() {
+  const date = document.getElementById("audit-date").value;
+  const user = document.getElementById("audit-user").value.trim();
+  const p = new URLSearchParams();
+  if (date) p.set("date", date);
+  if (user) p.set("user", user);
+  return p;
+}
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function auditRowsHtml(data) {
+  return data.map(r => {
+    const detail = r.data ? JSON.stringify(r.data) : "";
+    return \`<tr>
+      <td class="audit-time">\${esc(new Date(r.created_at).toLocaleString("he-IL"))}</td>
+      <td>\${esc(r.user_email)}</td>
+      <td class="audit-action">\${esc(r.action)}</td>
+      <td style="font-size:12px;color:#888" title="\${esc(detail)}">\${esc(detail.substring(0,90))}</td>
+      </tr>\`;
+  }).join("");
+}
+
+// reset=true starts a fresh query from the current filters; reset=false pages older rows.
+async function loadAudit(reset) {
+  if (reset) auditOffset = 0;
+  const p = auditQueryString();
+  p.set("limit", AUDIT_PAGE);
+  p.set("offset", auditOffset);
+  const res = await fetch("/api/admin/audit?" + p.toString(), { headers: { "x-admin-password": PWD } });
+  const data = await res.json();
+  const tbody = document.getElementById("table-audit");
+  const html = auditRowsHtml(data);
+  if (reset) {
+    tbody.innerHTML = html || '<tr><td colspan="4" class="empty">אין נתונים</td></tr>';
+  } else {
+    tbody.innerHTML += html;
+  }
+  auditOffset += data.length;
+  document.getElementById("audit-more").style.display = data.length < AUDIT_PAGE ? "none" : "";
+}
+
+function applyAuditFilter() { loadAudit(true); }
+function clearAuditFilter() {
+  document.getElementById("audit-date").value = "";
+  document.getElementById("audit-user").value = "";
+  loadAudit(true);
+}
+
+async function exportAudit() {
+  const res = await fetch("/api/admin/audit.csv?" + auditQueryString().toString(), { headers: { "x-admin-password": PWD } });
+  if (!res.ok) { toast("ייצוא נכשל"); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "audit-log.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function checkLabel(n) {
