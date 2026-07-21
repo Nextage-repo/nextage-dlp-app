@@ -290,6 +290,14 @@ describe("runCheck1", () => {
     expect(r.isValid).toBe(true);
   });
 
+  it("skips .dat attachments (never require encryption)", () => {
+    const r = runCheck1({
+      ...base,
+      attachments: [attachment("export.dat", null)],
+    });
+    expect(r.isValid).toBe(true);
+  });
+
   it("skips .txt even when other attachments are unencrypted (txt itself never flagged)", () => {
     const r = runCheck1({
       ...base,

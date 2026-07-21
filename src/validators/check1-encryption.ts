@@ -91,7 +91,7 @@ export function runCheck1(input: Check1Input): CheckResult {
   for (const att of attachments) {
     // Images are always skipped
     if (IMAGE_EXTENSIONS_REGEX.test(att.name)) continue;
-    // Plain text never requires encryption
+    // Plain text / data files (.txt, .dat) never require encryption
     if (TEXT_EXTENSIONS_REGEX.test(att.name)) continue;
     // RAR/7Z are always considered encrypted (no detection implemented yet).
     // .zip is NOT skipped here — classify() inspects its real encryption bit.

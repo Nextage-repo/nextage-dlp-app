@@ -30,8 +30,8 @@ export const MAGIC_BYTES = {
 // Image extensions — skipped in Check 1 (cannot be encrypted by extension)
 export const IMAGE_EXTENSIONS_REGEX = /\.(png|jpg|jpeg|gif|bmp|webp|svg|ico)$/i;
 
-// Plain text — skipped in Check 1 (never requires encryption)
-export const TEXT_EXTENSIONS_REGEX = /\.txt$/i;
+// Plain text / data files (.txt, .dat) — skipped in Check 1 (never require encryption)
+export const TEXT_EXTENSIONS_REGEX = /\.(txt|dat)$/i;
 
 // RAR/7Z — no internal-structure encryption check implemented yet, so these
 // are still assumed encrypted. .zip is EXCLUDED here on purpose: Check 1 now
