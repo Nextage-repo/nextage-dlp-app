@@ -75,6 +75,19 @@ export interface Role {
   active: boolean;
 }
 
+// "מוחרגים" (Excluded recipients) — trusted external destinations for which NO DLP
+// check runs. The admin enters an external email and chooses the scope: EMAIL (just
+// that address) or DOMAIN (any address at that email's domain). An entry stops
+// applying once its expiryDate is in the past (null = never expires).
+export interface ExcludedRecipient {
+  id: string;
+  email: string;
+  scope: "EMAIL" | "DOMAIN";
+  reason: string;
+  expiryDate: string | null; // ISO date; past date => inactive
+  requestedBy: string;
+}
+
 export interface DLPConfig {
   customers: Customer[];
   advisors: Advisor[];
@@ -82,4 +95,5 @@ export interface DLPConfig {
   exclusions: Exclusion[];
   rules: Rule[];
   roles: Role[];
+  excludedRecipients: ExcludedRecipient[];
 }

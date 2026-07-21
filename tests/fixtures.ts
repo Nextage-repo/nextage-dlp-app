@@ -1,6 +1,6 @@
 // Test fixtures for DLP validator tests.
 
-import { Advisor, Customer, Exclusion, Exemption } from "../src/models/customer.model";
+import { Advisor, Customer, ExcludedRecipient, Exclusion, Exemption } from "../src/models/customer.model";
 import { AttachmentWithHeader, EmailData } from "../src/models/dlp-result.model";
 
 // ----------------------------------------------------------------------------
@@ -160,6 +160,17 @@ export function exclusion(p: Partial<Exclusion> = {}): Exclusion {
     allowUnencrypted: p.allowUnencrypted ?? true,
     reason: p.reason ?? "test",
     expiryDate: p.expiryDate ?? null,
+  };
+}
+
+export function excludedRecipient(p: Partial<ExcludedRecipient> = {}): ExcludedRecipient {
+  return {
+    id: p.id ?? "exr-1",
+    email: p.email ?? "partner@bigcorp.com",
+    scope: p.scope ?? "EMAIL",
+    reason: p.reason ?? "trusted partner",
+    expiryDate: p.expiryDate ?? null,
+    requestedBy: p.requestedBy ?? "Admin",
   };
 }
 

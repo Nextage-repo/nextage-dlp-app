@@ -6,6 +6,7 @@ import { SAFE_MODE } from "../shared/constants";
 import { runCheck1 } from "./check1-encryption";
 import { runCheck2 } from "./check2-filename";
 import { runCheck3 } from "./check3-subject";
+import { allExternalRecipientsExcluded } from "./shared";
 
 export class DLPValidator {
   constructor(private readonly config: DLPConfig) {}
@@ -23,6 +24,24 @@ export class DLPValidator {
         results: [empty, { ...empty, check: 2 }, { ...empty, check: 3 }],
         hasBlock: false,
         hasWarning: true,
+        shouldBlock: false,
+      };
+    }
+
+    // "מוחרגים" — if every external recipient is a trusted excluded address/domain,
+    // skip ALL DLP checks. A mixed send that also reaches a non-excluded external
+    // recipient still runs normally (one whitelisted address can't cover the rest).
+    if (allExternalRecipientsExcluded(email.recipients, this.config.excludedRecipients)) {
+      const skipped: CheckResult = {
+        check: 1,
+        isValid: true,
+        severity: "INFO",
+        message: "נמען מוחרג — לא בוצעו בדיקות DLP",
+      };
+      return {
+        results: [skipped, { ...skipped, check: 2 }, { ...skipped, check: 3 }],
+        hasBlock: false,
+        hasWarning: false,
         shouldBlock: false,
       };
     }

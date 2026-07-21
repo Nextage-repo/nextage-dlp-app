@@ -1,10 +1,56 @@
 // Helpers shared between Check 1/2/3. Kept here so a new check can reuse them
 // without coupling sibling validator files together.
 
-import { Customer, Exemption, ExemptionType, Role } from "../models/customer.model";
+import { Customer, ExcludedRecipient, Exemption, ExemptionType, Role } from "../models/customer.model";
 import { INTERNAL_DOMAIN } from "../shared/constants";
 
 export type Permission = ExemptionType | "STANDARD";
+
+function domainOf(email: string): string {
+  return email.split("@")[1]?.toLowerCase() ?? "";
+}
+
+/**
+ * Returns the active "מוחרגים" entry that excludes this recipient from all DLP
+ * checks, or null. EMAIL scope matches the exact address; DOMAIN scope matches any
+ * address at the entry email's domain. Entries with a past expiryDate are ignored.
+ */
+export function recipientExclusionMatch(
+  recipient: string,
+  excluded: ExcludedRecipient[] | undefined | null,
+  now: Date = new Date(),
+): ExcludedRecipient | null {
+  if (!recipient || !Array.isArray(excluded)) return null;
+  const target = recipient.toLowerCase();
+  const targetDomain = domainOf(recipient);
+  return (
+    excluded.find((ex) => {
+      if (!ex.email) return false;
+      if (ex.expiryDate && new Date(ex.expiryDate) < now) return false;
+      if (ex.scope === "DOMAIN") {
+        // The admin may enter a full email ("x@bigcorp.com") or a bare domain.
+        const entryDomain = ex.email.includes("@") ? domainOf(ex.email) : ex.email.toLowerCase();
+        return entryDomain !== "" && entryDomain === targetDomain;
+      }
+      return ex.email.toLowerCase() === target;
+    }) ?? null
+  );
+}
+
+/**
+ * True when the email has at least one external recipient and EVERY external
+ * recipient is covered by an active exclusion — the condition to skip all DLP.
+ * Internal recipients are ignored (they already bypass via the internal fast-path).
+ */
+export function allExternalRecipientsExcluded(
+  recipients: string[],
+  excluded: ExcludedRecipient[] | undefined | null,
+  now: Date = new Date(),
+): boolean {
+  const external = recipients.filter((r) => domainOf(r) !== INTERNAL_DOMAIN.toLowerCase());
+  if (external.length === 0) return false;
+  return external.every((r) => recipientExclusionMatch(r, excluded, now) !== null);
+}
 
 /**
  * Returns the ACTIVE role that bypasses the given check for this sender, or null.

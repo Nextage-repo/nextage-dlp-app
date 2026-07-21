@@ -121,6 +121,17 @@ export class ConfigService {
           }))
       : [];
 
-    return { customers, advisors, exemptions, exclusions, rules, roles };
+    const excludedRecipients = Array.isArray(raw.excludedRecipients)
+      ? raw.excludedRecipients.map((e: any) => ({
+          id: String(e.id),
+          email: e.email ?? "",
+          scope: (e.scope ?? "EMAIL") === "DOMAIN" ? "DOMAIN" : "EMAIL",
+          reason: e.reason ?? "",
+          expiryDate: e.expiry_date ?? e.expiryDate ?? null,
+          requestedBy: e.requested_by ?? e.requestedBy ?? "",
+        }))
+      : [];
+
+    return { customers, advisors, exemptions, exclusions, rules, roles, excludedRecipients };
   }
 }

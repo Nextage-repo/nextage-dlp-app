@@ -65,6 +65,15 @@ async function initDB() {
         bypass_checks INT[] NOT NULL DEFAULT '{}',
         active BOOLEAN NOT NULL DEFAULT TRUE
       );
+      -- "מוחרגים" — trusted external recipients/domains that skip all DLP checks.
+      CREATE TABLE IF NOT EXISTS excluded_recipients (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'EMAIL',
+        reason TEXT,
+        expiry_date DATE,
+        requested_by TEXT
+      );
       -- Indexes keep the audit-log filters fast as the table grows (200+ users).
       CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log (created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_audit_user_email ON audit_log (user_email);
@@ -302,6 +311,39 @@ app.delete("/api/admin/roles/:id", adminAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Excluded recipients (מוחרגים) — email/domain destinations that skip all DLP
+function normalizeScope(v) {
+  return String(v).toUpperCase() === "DOMAIN" ? "DOMAIN" : "EMAIL";
+}
+function normalizeExpiry(v) {
+  const s = v == null ? "" : String(v).trim();
+  return s === "" ? null : s; // DATE column; empty -> never expires
+}
+app.get("/api/admin/excluded", adminAuth, async (req, res) => {
+  const r = await pool.query("SELECT * FROM excluded_recipients ORDER BY id");
+  res.json(r.rows);
+});
+app.post("/api/admin/excluded", adminAuth, async (req, res) => {
+  const { email, scope, reason, expiry_date, requested_by } = req.body;
+  const r = await pool.query(
+    "INSERT INTO excluded_recipients (email, scope, reason, expiry_date, requested_by) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+    [String(email || "").trim(), normalizeScope(scope), reason || "", normalizeExpiry(expiry_date), requested_by || ""]
+  );
+  res.json(r.rows[0]);
+});
+app.put("/api/admin/excluded/:id", adminAuth, async (req, res) => {
+  const { email, scope, reason, expiry_date, requested_by } = req.body;
+  const r = await pool.query(
+    "UPDATE excluded_recipients SET email=$1, scope=$2, reason=$3, expiry_date=$4, requested_by=$5 WHERE id=$6 RETURNING *",
+    [String(email || "").trim(), normalizeScope(scope), reason || "", normalizeExpiry(expiry_date), requested_by || "", req.params.id]
+  );
+  res.json(r.rows[0]);
+});
+app.delete("/api/admin/excluded/:id", adminAuth, async (req, res) => {
+  await pool.query("DELETE FROM excluded_recipients WHERE id=$1", [req.params.id]);
+  res.json({ ok: true });
+});
+
 // Audit log (read only). Supports filtering by day and by user, plus paging.
 // The full history is always stored; these params control what is returned.
 //   ?date=YYYY-MM-DD  — only events on that calendar day (Israel time)
@@ -443,6 +485,7 @@ app.get("/admin", (req, res) => {
     <button onclick="showTab('exclusions',this)">📎 סיומות קבצים</button>
     <button onclick="showTab('rules',this)">📜 חוקים</button>
     <button onclick="showTab('roles',this)">🎫 תפקידים</button>
+    <button onclick="showTab('excluded',this)">🚫 מוחרגים</button>
     <button onclick="showTab('audit',this)">📋 לוג ביקורת</button>
   </nav>
   <main>
@@ -516,6 +559,18 @@ app.get("/admin", (req, res) => {
         </div>
         <table><thead><tr><th>שם תפקיד</th><th>אימיילים משויכים</th><th>בדיקות שמדולגות</th><th>פעיל</th><th>פעולות</th></tr></thead>
         <tbody id="table-roles"></tbody></table>
+      </div>
+    </div>
+
+    <!-- EXCLUDED RECIPIENTS -->
+    <div class="section" id="section-excluded">
+      <div class="card">
+        <div class="card-header">
+          <h2>מוחרגים — נמענים/דומיינים שלא עוברים בדיקות DLP</h2>
+          <button class="btn btn-success btn-sm" onclick="openModal('excluded')">+ הוסף החרגה</button>
+        </div>
+        <table><thead><tr><th>מייל</th><th>היקף</th><th>סיבה</th><th>תוקף</th><th>ביקש/ה</th><th>פעולות</th></tr></thead>
+        <tbody id="table-excluded"></tbody></table>
       </div>
     </div>
 
@@ -650,6 +705,28 @@ async function loadTable(name) {
         <button class="btn btn-primary btn-sm" onclick='editRow("roles",\${JSON.stringify(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("roles",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
+  } else if (name === "excluded") {
+    const today = new Date(); today.setHours(0,0,0,0);
+    tbody.innerHTML = data.map(r => {
+      const expired = r.expiry_date && new Date(r.expiry_date) < today;
+      const scopeTag = r.scope === "DOMAIN"
+        ? '<span class="tag tag-green">כל הדומיין</span>'
+        : '<span class="tag tag-gray">מייל בלבד</span>';
+      const validTag = !r.expiry_date
+        ? '<span class="tag tag-green">ללא תפוגה</span>'
+        : (expired ? \`<span class="tag tag-red">פג (\${new Date(r.expiry_date).toLocaleDateString("he-IL")})</span>\`
+                   : \`<span class="tag">\${new Date(r.expiry_date).toLocaleDateString("he-IL")}</span>\`);
+      return \`<tr>
+      <td><strong>\${r.email}</strong></td>
+      <td>\${scopeTag}</td>
+      <td>\${r.reason||""}</td>
+      <td>\${validTag}</td>
+      <td>\${r.requested_by||""}</td>
+      <td class="actions">
+        <button class="btn btn-primary btn-sm" onclick='editRow("excluded",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("excluded",\${r.id})'>🗑️</button>
+      </td></tr>\`;
+    }).join("");
   }
 }
 
@@ -738,7 +815,7 @@ function openModal(table, row) {
 function editRow(table, row) { openModal(table, row); }
 
 function tableLabel(t) {
-  return { customers:"לקוח", advisors:"יועץ", exemptions:"פטור", exclusions:"סיומת", rules:"חוק", roles:"תפקיד" }[t] || t;
+  return { customers:"לקוח", advisors:"יועץ", exemptions:"פטור", exclusions:"סיומת", rules:"חוק", roles:"תפקיד", excluded:"החרגה" }[t] || t;
 }
 
 function buildForm(table, row) {
@@ -808,6 +885,23 @@ function buildForm(table, row) {
         <option value="true" \${row?.active!==false?"selected":""}>כן</option>
         <option value="false" \${row?.active===false?"selected":""}>לא</option>
       </select></div>\`; }
+  if (table === "excluded") { const exp = row?.expiry_date ? String(row.expiry_date).substring(0,10) : ""; return \`
+    <div class="form-group"><label>מייל חיצוני</label>
+      <input id="f-email" value="\${row?.email||""}" placeholder="partner@bigcorp.com"/>
+      <small>כתובת המייל החיצונית להחרגה</small></div>
+    <div class="form-group"><label>היקף ההחרגה</label>
+      <select id="f-scope">
+        <option value="EMAIL" \${row?.scope!=="DOMAIN"?"selected":""}>מייל בלבד — רק הכתובת הזו</option>
+        <option value="DOMAIN" \${row?.scope==="DOMAIN"?"selected":""}>כל הדומיין — כל כתובת באותו דומיין</option>
+      </select>
+      <small>"כל הדומיין" מחריג כל כתובת בדומיין של המייל שהוזן</small></div>
+    <div class="form-group"><label>סיבה להחרגה</label>
+      <input id="f-reason" value="\${row?.reason||""}" placeholder="שותף עסקי מאובטח"/></div>
+    <div class="form-group"><label>תאריך תוקף</label>
+      <input type="date" id="f-expiry" value="\${exp}"/>
+      <small>לאחר תאריך זה ההחרגה אינה פעילה. השאר ריק ללא תפוגה.</small></div>
+    <div class="form-group"><label>מי ביקש/ה את ההחרגה</label>
+      <input id="f-requested-by" value="\${row?.requested_by||""}" placeholder="שם המבקש/ת"/></div>\`; }
 }
 
 function getFormData(table) {
@@ -848,6 +942,13 @@ function getFormData(table) {
       active: document.getElementById("f-active").value === "true"
     };
   }
+  if (table === "excluded") return {
+    email: document.getElementById("f-email").value.trim(),
+    scope: document.getElementById("f-scope").value,
+    reason: document.getElementById("f-reason").value.trim(),
+    expiry_date: document.getElementById("f-expiry").value || null,
+    requested_by: document.getElementById("f-requested-by").value.trim()
+  };
 }
 
 async function saveModal() {
@@ -885,13 +986,14 @@ function toast(msg) {
 // Config endpoint — reads from PostgreSQL
 app.get("/api/config", async (req, res) => {
   try {
-    const [customers, advisors, exemptions, exclusions, rules, roles] = await Promise.all([
+    const [customers, advisors, exemptions, exclusions, rules, roles, excluded] = await Promise.all([
       pool.query("SELECT * FROM customers"),
       pool.query("SELECT * FROM advisors"),
       pool.query("SELECT * FROM exemptions"),
       pool.query("SELECT * FROM exclusions"),
       pool.query("SELECT * FROM rules WHERE active = TRUE"),
       pool.query("SELECT * FROM roles WHERE active = TRUE"),
+      pool.query("SELECT * FROM excluded_recipients WHERE expiry_date IS NULL OR expiry_date >= CURRENT_DATE"),
     ]);
 
     res.json({
@@ -901,6 +1003,7 @@ app.get("/api/config", async (req, res) => {
       exclusions: exclusions.rows,
       rules: rules.rows,
       roles: roles.rows,
+      excludedRecipients: excluded.rows,
     });
   } catch (err) {
     console.error("[Config] DB error:", err.message);
