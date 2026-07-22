@@ -52,10 +52,14 @@ function decodeBase64(input: string, maxBytes: number): Uint8Array {
 const HEADER_BYTES = 4096;
 // 4 KiB binary = ~5462 base64 chars. We slice a bit more for safety.
 const BASE64_CHARS_TO_READ = 5600;
-// Trailer window: PDFs put the /Encrypt entry in the trailer at the end of the
-// file. 8 KiB from the end is plenty to capture it.
-const TRAILER_BYTES = 8192;
+// Trailer window: PDFs put the /Encrypt entry in the trailer at the very end of
+// the file (…/Encrypt N 0 R >> startxref … %%EOF). We read the last ~8 KiB.
 const BASE64_TRAILER_CHARS = 11000;
+// Byte cap when decoding the trailer slice. MUST exceed the max bytes the slice
+// can yield (~8.25 KiB from BASE64_TRAILER_CHARS) — decodeBase64 keeps the FIRST
+// maxBytes, so a cap below the slice size front-truncates and chops the true EOF
+// (this dropped the PDF trailer's /Encrypt and mis-flagged encrypted PDFs as plain).
+const TRAILER_DECODE_MAX = 12288;
 
 export async function readAttachmentsWithHeaders(
   item: Office.MessageCompose,
@@ -100,6 +104,25 @@ interface ContentSlices {
   trailerBytes: Uint8Array | null;
 }
 
+// Pure slicing of a base64 attachment into a header sample + an EOF trailer sample.
+// Exported so the header/trailer windowing can be unit-tested without Office.js.
+export function sliceHeaderAndTrailer(content: string): ContentSlices {
+  const headSample = content.slice(0, BASE64_CHARS_TO_READ);
+  const headAligned = headSample.slice(0, headSample.length - (headSample.length % 4));
+  const magicBytes = decodeBase64(headAligned, HEADER_BYTES);
+
+  // Trailer: the last chunk, starting on a 4-char (3-byte) boundary so the decode
+  // stays byte-aligned, and decoded in FULL so it ends exactly at %%EOF. Captures
+  // the PDF /Encrypt entry that lives in the last few dozen bytes of the file.
+  let trailerBytes: Uint8Array | null = null;
+  if (content.length > BASE64_CHARS_TO_READ) {
+    let start = Math.max(0, content.length - BASE64_TRAILER_CHARS);
+    start += (4 - (start % 4)) % 4; // round up to a 4-char boundary
+    trailerBytes = decodeBase64(content.slice(start), TRAILER_DECODE_MAX);
+  }
+  return { magicBytes, trailerBytes };
+}
+
 function readContentSlices(item: Office.MessageCompose, attachmentId: string): Promise<ContentSlices> {
   return new Promise((resolve, reject) => {
     if (typeof item.getAttachmentContentAsync !== "function") {
@@ -128,22 +151,7 @@ function readContentSlices(item: Office.MessageCompose, attachmentId: string): P
           // the decode would throw -> magicBytes=null -> Check 1 reports the file
           // "unverifiable" and blocks a properly-encrypted attachment. decodeBase64
           // is self-contained and works in both runtimes.
-          // Trim to a multiple of 4 so the decoder doesn't choke on partial groups.
-          const content = value.content;
-          const headSample = content.slice(0, BASE64_CHARS_TO_READ);
-          const headAligned = headSample.slice(0, headSample.length - (headSample.length % 4));
-          const magicBytes = decodeBase64(headAligned, HEADER_BYTES);
-
-          // Trailer: the last chunk, starting on a 4-char (3-byte) boundary so the
-          // decode stays byte-aligned. Captures the PDF /Encrypt trailer at EOF.
-          let trailerBytes: Uint8Array | null = null;
-          if (content.length > BASE64_CHARS_TO_READ) {
-            let start = Math.max(0, content.length - BASE64_TRAILER_CHARS);
-            start += (4 - (start % 4)) % 4; // round up to a 4-char boundary
-            trailerBytes = decodeBase64(content.slice(start), TRAILER_BYTES + 16);
-          }
-
-          resolve({ magicBytes, trailerBytes });
+          resolve(sliceHeaderAndTrailer(value.content));
         } catch (e) {
           reject(e instanceof Error ? e : new Error(String(e)));
         }
