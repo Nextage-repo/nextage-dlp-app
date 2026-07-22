@@ -75,6 +75,7 @@ export class DLPValidator {
       exemptions: this.config.exemptions,
       exclusions: this.config.exclusions,
       roles: this.config.roles,
+      excludedRecipients: this.config.excludedRecipients,
     });
 
     const results = [check1, check2, check3];

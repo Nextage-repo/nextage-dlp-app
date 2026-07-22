@@ -2,10 +2,10 @@
 // BLOCK: unknown recipient domain OR subject missing identified customer name
 // WARNING: advisor-only recipient + subject missing linked customer
 
-import { Advisor, Customer, Exclusion, Exemption, Role } from "../models/customer.model";
+import { Advisor, Customer, ExcludedRecipient, Exclusion, Exemption, Role } from "../models/customer.model";
 import { CheckResult } from "../models/dlp-result.model";
 import { INTERNAL_DOMAIN, SAFE_MODE } from "../shared/constants";
-import { findCustomersInRecipients, getRoleBypass, getUserPermission } from "./shared";
+import { findCustomersInRecipients, getRoleBypass, getUserPermission, recipientExclusionMatch } from "./shared";
 
 export interface Check3Input {
   subject: string;
@@ -16,10 +16,11 @@ export interface Check3Input {
   exemptions: Exemption[];
   exclusions: Exclusion[];
   roles?: Role[];
+  excludedRecipients?: ExcludedRecipient[];
 }
 
 export function runCheck3(input: Check3Input): CheckResult {
-  const { subject, recipients, userEmail, customers, advisors, exemptions, exclusions, roles } = input;
+  const { subject, recipients, userEmail, customers, advisors, exemptions, exclusions, roles, excludedRecipients } = input;
 
   const permission = getUserPermission(userEmail, exemptions);
   if (permission === "ALL_CHECKS" || permission === "CHECK_3_BYPASS") {
@@ -40,7 +41,7 @@ export function runCheck3(input: Check3Input): CheckResult {
   // longer hard-blocks on its own; if there's an unencrypted attachment, Check 1
   // still blocks the send. So: unknown domain + encrypted/no file -> warning prompt
   // (Send Anyway / Don't Send); unknown domain + unencrypted file -> hard block.
-  const unknownDomains = findUnknownDomains(recipients, customers, advisors, exclusions);
+  const unknownDomains = findUnknownDomains(recipients, customers, advisors, exclusions, excludedRecipients);
   if (unknownDomains.length > 0) {
     return {
       check: 3,
@@ -148,6 +149,7 @@ function findUnknownDomains(
   customers: Customer[],
   advisors: Advisor[],
   exclusions: Exclusion[],
+  excludedRecipients?: ExcludedRecipient[],
 ): string[] {
   const known = new Set<string>([INTERNAL_DOMAIN.toLowerCase()]);
 
@@ -166,7 +168,12 @@ function findUnknownDomains(
   for (const r of recipients) {
     const domain = r.split("@")[1]?.toLowerCase();
     if (!domain) continue;
-    if (!known.has(domain)) unknown.add(domain);
+    if (known.has(domain)) continue;
+    // A recipient on the "מוחרגים" list is known/trusted — don't flag it as unknown.
+    // recipientExclusionMatch honours EMAIL vs DOMAIN scope and expiry, so an
+    // EMAIL-scope entry only clears that exact address, not the whole domain.
+    if (recipientExclusionMatch(r, excludedRecipients)) continue;
+    unknown.add(domain);
   }
   return Array.from(unknown);
 }

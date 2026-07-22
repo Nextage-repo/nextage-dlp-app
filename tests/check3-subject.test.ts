@@ -1,5 +1,5 @@
 import { runCheck3 } from "../src/validators/check3-subject";
-import { advisor, customer, exemption } from "./fixtures";
+import { advisor, customer, exemption, excludedRecipient } from "./fixtures";
 
 describe("runCheck3 (subject + domain validation)", () => {
   const matchingCustomer = customer({
@@ -104,6 +104,52 @@ describe("runCheck3 (subject + domain validation)", () => {
         exemption({ userEmail: "sender@nextage.co.il", exemptionType: "CHECK_3_BYPASS" }),
       ],
       exclusions: [],
+    });
+    expect(r.isValid).toBe(true);
+  });
+
+  // Regression: excluded ("מוחרגים") recipients must count as KNOWN domains, so a
+  // mixed send (one excluded + one customer) does not warn "unknown domain".
+  it("does NOT flag an excluded recipient as an unknown domain", () => {
+    const r = runCheck3({
+      subject: "AcmeCorp update",
+      recipients: ["someone@team.co.il", "finance@acme.com"],
+      userEmail: "sender@nextage.co.il",
+      customers: [matchingCustomer],
+      advisors: [],
+      exemptions: [],
+      exclusions: [],
+      excludedRecipients: [excludedRecipient({ email: "team.co.il", scope: "DOMAIN" })],
+    });
+    expect(r.isValid).toBe(true);
+    expect(r.message).not.toContain("team.co.il");
+  });
+
+  it("EMAIL-scope exclusion clears only the exact address, not the whole domain", () => {
+    const r = runCheck3({
+      subject: "hi",
+      recipients: ["other@team.co.il"], // NOT the excluded address
+      userEmail: "sender@nextage.co.il",
+      customers: [matchingCustomer],
+      advisors: [],
+      exemptions: [],
+      exclusions: [],
+      excludedRecipients: [excludedRecipient({ email: "test@team.co.il", scope: "EMAIL" })],
+    });
+    expect(r.severity).toBe("WARNING");
+    expect(r.message).toContain("team.co.il");
+  });
+
+  it("EMAIL-scope exclusion: the exact excluded address is NOT flagged as unknown", () => {
+    const r = runCheck3({
+      subject: "hi",
+      recipients: ["test@team.co.il"],
+      userEmail: "sender@nextage.co.il",
+      customers: [matchingCustomer],
+      advisors: [],
+      exemptions: [],
+      exclusions: [],
+      excludedRecipients: [excludedRecipient({ email: "test@team.co.il", scope: "EMAIL" })],
     });
     expect(r.isValid).toBe(true);
   });
