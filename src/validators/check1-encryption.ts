@@ -15,7 +15,7 @@ import {
   AttachmentWithHeader,
   CheckResult,
 } from "../models/dlp-result.model";
-import { Exclusion, Exemption, Role, Rule } from "../models/customer.model";
+import { EncryptionKeyword, Exclusion, Exemption, Role, Rule } from "../models/customer.model";
 import {
   ARCHIVE_EXTENSIONS_REGEX,
   IMAGE_EXTENSIONS_REGEX,
@@ -38,12 +38,37 @@ export interface Check1Input {
   subject: string;
   rules: Rule[];
   roles?: Role[];
+  encryptionKeywords?: EncryptionKeyword[];
 }
 
 type EncryptionStatus = "ENCRYPTED" | "UNENCRYPTED" | "UNVERIFIABLE";
 
+// Normalize a name/keyword for matching: lowercase and strip whitespace and common
+// separators/punctuation (spaces, _, -, ., etc.), while KEEPING Hebrew and Latin
+// letters and digits. So "MONTHLY REPORT" and "Monthly_Report" both become the same.
+// (Uses an explicit separator class rather than \p{L}, which needs an ES6+ target.)
+function normalizeForMatch(s: string): string {
+  return (s || "").toLowerCase().replace(/[\s._\-,;:!?'"“”„«»()\[\]{}<>|\\\/@#$%^&*=+~]/g, "");
+}
+
+// True if the filename requires encryption — i.e. it contains (normalized) at least
+// one active keyword. Empty/undefined list => nothing requires encryption.
+export function filenameRequiresEncryption(
+  name: string,
+  keywords: EncryptionKeyword[] | undefined | null,
+): boolean {
+  if (!Array.isArray(keywords) || keywords.length === 0) return false;
+  const n = normalizeForMatch(name);
+  if (!n) return false;
+  return keywords.some((k) => {
+    if (!k || k.active === false) return false;
+    const kw = normalizeForMatch(k.keyword);
+    return kw.length > 0 && n.includes(kw);
+  });
+}
+
 export function runCheck1(input: Check1Input): CheckResult {
-  const { attachments, recipients, userEmail, exclusions, exemptions, subject, rules, roles } = input;
+  const { attachments, recipients, userEmail, exclusions, exemptions, subject, rules, roles, encryptionKeywords } = input;
 
   // 1. User exemption
   const permission = getUserPermission(userEmail, exemptions);
@@ -85,10 +110,18 @@ export function runCheck1(input: Check1Input): CheckResult {
     };
   }
 
-  // 5. Classify each non-image attachment
+  // 6. Name-based enforcement ("דורשי הצפנה"): only attachments whose FILENAME
+  // contains a configured keyword require encryption. Any other file passes — the
+  // org opted into checking encryption by filename, not on every attachment.
+  const required = attachments.filter((att) => filenameRequiresEncryption(att.name, encryptionKeywords));
+  if (required.length === 0) {
+    return pass("אין קבצים הדורשים הצפנה לפי שם הקובץ");
+  }
+
+  // 7. Classify each keyword-matched attachment
   const unencrypted: string[] = [];
   const unverifiable: string[] = [];
-  for (const att of attachments) {
+  for (const att of required) {
     // Images are always skipped
     if (IMAGE_EXTENSIONS_REGEX.test(att.name)) continue;
     // Plain text / data files (.txt, .dat) never require encryption

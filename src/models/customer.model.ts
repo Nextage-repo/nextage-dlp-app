@@ -88,6 +88,19 @@ export interface ExcludedRecipient {
   requestedBy: string;
 }
 
+// "דורשי הצפנה" (Encryption keywords) — name-based encryption enforcement. An
+// attachment must be encrypted ONLY if its filename contains one of these keywords.
+// Any file whose name matches no keyword is not checked for encryption. Matching is
+// normalized: case-insensitive and ignoring spaces/underscores/hyphens/punctuation,
+// so "MONTHLY REPORT" matches "Monthly_Report_2026.xlsx". Empty list => nothing
+// requires encryption. Independent of ExcludedRecipient (מוחרגים).
+export interface EncryptionKeyword {
+  id: string;
+  keyword: string;
+  note: string;
+  active: boolean;
+}
+
 export interface DLPConfig {
   customers: Customer[];
   advisors: Advisor[];
@@ -96,4 +109,5 @@ export interface DLPConfig {
   rules: Rule[];
   roles: Role[];
   excludedRecipients: ExcludedRecipient[];
+  encryptionKeywords: EncryptionKeyword[];
 }

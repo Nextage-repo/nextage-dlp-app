@@ -74,6 +74,14 @@ async function initDB() {
         expiry_date DATE,
         requested_by TEXT
       );
+      -- "דורשי הצפנה" — filename keywords; a file must be encrypted only if its
+      -- name contains one of these (normalized, name-based encryption enforcement).
+      CREATE TABLE IF NOT EXISTS encryption_keywords (
+        id SERIAL PRIMARY KEY,
+        keyword TEXT NOT NULL,
+        note TEXT,
+        active BOOLEAN NOT NULL DEFAULT TRUE
+      );
       -- Indexes keep the audit-log filters fast as the table grows (200+ users).
       CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log (created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_audit_user_email ON audit_log (user_email);
@@ -111,6 +119,27 @@ async function initDB() {
         ["CFO", [], [1]],
       );
       console.log("✅ Seeded roles (תפקידים) with the CFO role (skips encryption)");
+    }
+
+    // Seed the "דורשי הצפנה" keyword list once (only if empty). Matching is
+    // normalized (case/space/underscore/hyphen-insensitive), so one Hebrew + one
+    // English form per concept covers all the punctuation/spacing variants.
+    const kwCount = await pool.query("SELECT COUNT(*)::int AS n FROM encryption_keywords");
+    if (kwCount.rows[0].n === 0) {
+      const kwSeed = [
+        ["קאש ברן", "דוח קאש ברן"], ["cash burn", "Cash burn report"],
+        ["דוח חודשי", "דוח חודשי"], ["monthly report", "Monthly report"],
+        ["שכר", "שכר / תלושי שכר"], ["payroll", "Payroll"], ["salary", "Salary"],
+        ["תלוש", "תלוש שכר"], ["payslip", "Payslip"],
+        ["טופס 106", "טופס 106"], ["form 106", "Form 106"],
+        ["מאזן בוחן", "מאזן בוחן / trial balance"], ["trial balance", "Trial balance"],
+        ["דוח כספי", "דוחות כספיים"], ["financial statement", "Financial statements"],
+        ["תקציב", "תקציב"], ["budget", "Budget"],
+      ];
+      for (const [keyword, note] of kwSeed) {
+        await pool.query("INSERT INTO encryption_keywords (keyword, note, active) VALUES ($1, $2, TRUE)", [keyword, note]);
+      }
+      console.log("✅ Seeded encryption_keywords (דורשי הצפנה) with " + kwSeed.length + " keywords");
     }
     console.log("✅ Database tables ready");
   } catch (err) {
@@ -344,6 +373,32 @@ app.delete("/api/admin/excluded/:id", adminAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Encryption keywords (דורשי הצפנה) — filenames containing these require encryption
+app.get("/api/admin/encwords", adminAuth, async (req, res) => {
+  const r = await pool.query("SELECT * FROM encryption_keywords ORDER BY id");
+  res.json(r.rows);
+});
+app.post("/api/admin/encwords", adminAuth, async (req, res) => {
+  const { keyword, note, active } = req.body;
+  const r = await pool.query(
+    "INSERT INTO encryption_keywords (keyword, note, active) VALUES ($1, $2, $3) RETURNING *",
+    [String(keyword || "").trim(), note || "", active !== false]
+  );
+  res.json(r.rows[0]);
+});
+app.put("/api/admin/encwords/:id", adminAuth, async (req, res) => {
+  const { keyword, note, active } = req.body;
+  const r = await pool.query(
+    "UPDATE encryption_keywords SET keyword=$1, note=$2, active=$3 WHERE id=$4 RETURNING *",
+    [String(keyword || "").trim(), note || "", active !== false, req.params.id]
+  );
+  res.json(r.rows[0]);
+});
+app.delete("/api/admin/encwords/:id", adminAuth, async (req, res) => {
+  await pool.query("DELETE FROM encryption_keywords WHERE id=$1", [req.params.id]);
+  res.json({ ok: true });
+});
+
 // Audit log (read only). Supports filtering by day and by user, plus paging.
 // The full history is always stored; these params control what is returned.
 //   ?date=YYYY-MM-DD  — only events on that calendar day (Israel time)
@@ -486,6 +541,7 @@ app.get("/admin", (req, res) => {
     <button onclick="showTab('rules',this)">📜 חוקים</button>
     <button onclick="showTab('roles',this)">🎫 תפקידים</button>
     <button onclick="showTab('excluded',this)">🚫 מוחרגים</button>
+    <button onclick="showTab('encwords',this)">🔐 דורשי הצפנה</button>
     <button onclick="showTab('audit',this)">📋 לוג ביקורת</button>
   </nav>
   <main>
@@ -571,6 +627,19 @@ app.get("/admin", (req, res) => {
         </div>
         <table><thead><tr><th>מייל</th><th>היקף</th><th>סיבה</th><th>תוקף</th><th>ביקש/ה</th><th>פעולות</th></tr></thead>
         <tbody id="table-excluded"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ENCRYPTION KEYWORDS -->
+    <div class="section" id="section-encwords">
+      <div class="card">
+        <div class="card-header">
+          <h2>דורשי הצפנה — קבצים שחייבים הצפנה לפי שם הקובץ</h2>
+          <button class="btn btn-success btn-sm" onclick="openModal('encwords')">+ הוסף מילה</button>
+        </div>
+        <p style="color:#666;font-size:13px;margin:0 0 12px">קובץ יידרש להיות מוצפן רק אם שם הקובץ מכיל אחת מהמילים הבאות. ההתאמה מתעלמת מרווחים, מקפים, קווים תחתונים ואותיות גדולות/קטנות. אם הרשימה ריקה — אף קובץ לא יידרש הצפנה.</p>
+        <table><thead><tr><th>מילה</th><th>הערה</th><th>פעיל</th><th>פעולות</th></tr></thead>
+        <tbody id="table-encwords"></tbody></table>
       </div>
     </div>
 
@@ -727,6 +796,15 @@ async function loadTable(name) {
         <button class="btn btn-danger btn-sm" onclick='deleteRow("excluded",\${r.id})'>🗑️</button>
       </td></tr>\`;
     }).join("");
+  } else if (name === "encwords") {
+    tbody.innerHTML = data.map(r => \`<tr>
+      <td><strong>\${r.keyword}</strong></td>
+      <td>\${r.note||""}</td>
+      <td>\${r.active ? '<span class="tag tag-green">פעיל</span>' : '<span class="tag tag-gray">לא פעיל</span>'}</td>
+      <td class="actions">
+        <button class="btn btn-primary btn-sm" onclick='editRow("encwords",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("encwords",\${r.id})'>🗑️</button>
+      </td></tr>\`).join("");
   }
 }
 
@@ -815,7 +893,7 @@ function openModal(table, row) {
 function editRow(table, row) { openModal(table, row); }
 
 function tableLabel(t) {
-  return { customers:"לקוח", advisors:"יועץ", exemptions:"פטור", exclusions:"סיומת", rules:"חוק", roles:"תפקיד", excluded:"החרגה" }[t] || t;
+  return { customers:"לקוח", advisors:"יועץ", exemptions:"פטור", exclusions:"סיומת", rules:"חוק", roles:"תפקיד", excluded:"החרגה", encwords:"מילת הצפנה" }[t] || t;
 }
 
 function buildForm(table, row) {
@@ -902,6 +980,17 @@ function buildForm(table, row) {
       <small>לאחר תאריך זה ההחרגה אינה פעילה. השאר ריק ללא תפוגה.</small></div>
     <div class="form-group"><label>מי ביקש/ה את ההחרגה</label>
       <input id="f-requested-by" value="\${row?.requested_by||""}" placeholder="שם המבקש/ת"/></div>\`; }
+  if (table === "encwords") return \`
+    <div class="form-group"><label>מילה בשם הקובץ</label>
+      <input id="f-keyword" value="\${row?.keyword||""}" placeholder="cash burn"/>
+      <small>קובץ שֵשמו מכיל מילה זו יידרש להיות מוצפן. מתעלם מרווחים, מקפים ואותיות גדולות/קטנות.</small></div>
+    <div class="form-group"><label>הערה</label>
+      <input id="f-note" value="\${row?.note||""}" placeholder="דוח קאש ברן"/></div>
+    <div class="form-group"><label>פעיל</label>
+      <select id="f-active">
+        <option value="true" \${row?.active!==false?"selected":""}>כן</option>
+        <option value="false" \${row?.active===false?"selected":""}>לא</option>
+      </select></div>\`;
 }
 
 function getFormData(table) {
@@ -949,6 +1038,11 @@ function getFormData(table) {
     expiry_date: document.getElementById("f-expiry").value || null,
     requested_by: document.getElementById("f-requested-by").value.trim()
   };
+  if (table === "encwords") return {
+    keyword: document.getElementById("f-keyword").value.trim(),
+    note: document.getElementById("f-note").value.trim(),
+    active: document.getElementById("f-active").value === "true"
+  };
 }
 
 async function saveModal() {
@@ -986,7 +1080,7 @@ function toast(msg) {
 // Config endpoint — reads from PostgreSQL
 app.get("/api/config", async (req, res) => {
   try {
-    const [customers, advisors, exemptions, exclusions, rules, roles, excluded] = await Promise.all([
+    const [customers, advisors, exemptions, exclusions, rules, roles, excluded, encwords] = await Promise.all([
       pool.query("SELECT * FROM customers"),
       pool.query("SELECT * FROM advisors"),
       pool.query("SELECT * FROM exemptions"),
@@ -994,6 +1088,7 @@ app.get("/api/config", async (req, res) => {
       pool.query("SELECT * FROM rules WHERE active = TRUE"),
       pool.query("SELECT * FROM roles WHERE active = TRUE"),
       pool.query("SELECT * FROM excluded_recipients WHERE expiry_date IS NULL OR expiry_date >= CURRENT_DATE"),
+      pool.query("SELECT * FROM encryption_keywords WHERE active = TRUE"),
     ]);
 
     res.json({
@@ -1004,6 +1099,7 @@ app.get("/api/config", async (req, res) => {
       rules: rules.rows,
       roles: roles.rows,
       excludedRecipients: excluded.rows,
+      encryptionKeywords: encwords.rows,
     });
   } catch (err) {
     console.error("[Config] DB error:", err.message);

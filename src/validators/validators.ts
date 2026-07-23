@@ -55,6 +55,7 @@ export class DLPValidator {
       subject: email.subject,
       rules: this.config.rules,
       roles: this.config.roles,
+      encryptionKeywords: this.config.encryptionKeywords,
     });
 
     const check2 = runCheck2({

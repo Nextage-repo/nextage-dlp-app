@@ -132,6 +132,17 @@ export class ConfigService {
         }))
       : [];
 
-    return { customers, advisors, exemptions, exclusions, rules, roles, excludedRecipients };
+    const encryptionKeywords = Array.isArray(raw.encryptionKeywords)
+      ? raw.encryptionKeywords
+          .filter((k: any) => k.active !== false)
+          .map((k: any) => ({
+            id: String(k.id),
+            keyword: k.keyword ?? "",
+            note: k.note ?? "",
+            active: k.active !== false,
+          }))
+      : [];
+
+    return { customers, advisors, exemptions, exclusions, rules, roles, excludedRecipients, encryptionKeywords };
   }
 }

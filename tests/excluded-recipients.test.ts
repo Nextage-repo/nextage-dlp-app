@@ -62,6 +62,7 @@ describe("DLPValidator skips all checks for excluded recipients", () => {
       rules: [],
       roles: [],
       excludedRecipients: [],
+      encryptionKeywords: [],
       ...over,
     };
   }
@@ -85,16 +86,20 @@ describe("DLPValidator skips all checks for excluded recipients", () => {
 
   it("still runs checks when a non-excluded external recipient is also present", async () => {
     const validator = new DLPValidator(
-      config({ excludedRecipients: [excludedRecipient({ email: "partner@bigcorp.com", scope: "EMAIL" })] }),
+      config({
+        excludedRecipients: [excludedRecipient({ email: "partner@bigcorp.com", scope: "EMAIL" })],
+        encryptionKeywords: [{ id: "k", keyword: "payroll", note: "", active: true }],
+      }),
     );
     const result = await validator.runAllChecks(
       email({
         recipients: ["partner@bigcorp.com", "someone@othercorp.com"],
         subject: "hi",
-        attachments: [attachment("payroll.xlsx", headerZipPlain)],
+        attachments: [attachment("payroll.xlsx", headerZipPlain)], // keyword-matched + unencrypted
       }),
     );
-    // Unencrypted attachment to a non-excluded external recipient -> Check 1 blocks.
+    // Not all external recipients are excluded, so checks run: the keyword-matched
+    // unencrypted attachment -> Check 1 blocks.
     expect(result.hasBlock).toBe(true);
   });
 });

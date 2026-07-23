@@ -93,6 +93,9 @@ describe("classify (magic-byte detection)", () => {
 });
 
 describe("runCheck1", () => {
+  // Base config enforces encryption on filenames containing "payroll" — the test
+  // files below are named payroll.* so the existing enforcement assertions hold
+  // under the new name-based model.
   const base = {
     recipients: externalRecipients,
     userEmail: "sender@nextage.co.il",
@@ -100,6 +103,7 @@ describe("runCheck1", () => {
     exemptions: [],
     subject: "regular subject with no rule",
     rules: [],
+    encryptionKeywords: [{ id: "k1", keyword: "payroll", note: "", active: true }],
   };
 
   const rule = (expression: string, active = true) => ({
@@ -192,7 +196,7 @@ describe("runCheck1", () => {
   it("BLOCKs with 'unverifiable' message when headers cannot be read", () => {
     const r = runCheck1({
       ...base,
-      attachments: [attachment("file.zip", null)],
+      attachments: [attachment("payroll.zip", null)],
     });
     expect(r.severity).toBe("BLOCK");
     expect(r.message).toContain("לא ניתן לאמת");
@@ -201,7 +205,7 @@ describe("runCheck1", () => {
   it("PASSes when ZIP is properly encrypted", () => {
     const r = runCheck1({
       ...base,
-      attachments: [attachment("docs.zip", headerZipEncrypted)],
+      attachments: [attachment("payroll.zip", headerZipEncrypted)],
     });
     expect(r.isValid).toBe(true);
   });
@@ -271,11 +275,11 @@ describe("runCheck1", () => {
     expect(r.severity).toBe("BLOCK");
   });
 
-  it("skips image attachments", () => {
+  it("skips image attachments even when the name matches a keyword", () => {
     const r = runCheck1({
       ...base,
       attachments: [
-        attachment("photo.png", new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
+        attachment("payroll.png", new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
         attachment("payroll.xlsx", headerOLE2),
       ],
     });
@@ -285,7 +289,7 @@ describe("runCheck1", () => {
   it("skips .txt attachments (never require encryption)", () => {
     const r = runCheck1({
       ...base,
-      attachments: [attachment("notes.txt", null)],
+      attachments: [attachment("payroll.txt", null)],
     });
     expect(r.isValid).toBe(true);
   });
@@ -293,7 +297,7 @@ describe("runCheck1", () => {
   it("skips .dat attachments (never require encryption)", () => {
     const r = runCheck1({
       ...base,
-      attachments: [attachment("export.dat", null)],
+      attachments: [attachment("payroll.dat", null)],
     });
     expect(r.isValid).toBe(true);
   });
@@ -306,5 +310,73 @@ describe("runCheck1", () => {
     expect(r.severity).toBe("BLOCK");
     expect(r.message).toContain("payroll.xlsx");
     expect(r.message).not.toContain("notes.txt");
+  });
+
+  // ---- name-based enforcement ("דורשי הצפנה") ----
+  const kw = (keyword: string) => [{ id: "k-" + keyword, keyword, note: "", active: true }];
+
+  it("does NOT require encryption when the filename matches no keyword", () => {
+    const r = runCheck1({
+      ...base,
+      encryptionKeywords: kw("payroll"),
+      attachments: [attachment("holiday-photo-list.xlsx", headerZipPlain)], // unencrypted, no keyword
+    });
+    expect(r.isValid).toBe(true);
+    expect(r.message).toContain("אין קבצים הדורשים הצפנה");
+  });
+
+  it("empty keyword list => nothing requires encryption", () => {
+    const r = runCheck1({
+      ...base,
+      encryptionKeywords: [],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)], // unencrypted
+    });
+    expect(r.isValid).toBe(true);
+  });
+
+  it("BLOCKs an unencrypted file whose name matches a keyword", () => {
+    const r = runCheck1({
+      ...base,
+      encryptionKeywords: kw("cash burn"),
+      attachments: [attachment("Cash-Burn-June.xlsx", headerZipPlain)],
+    });
+    expect(r.severity).toBe("BLOCK");
+    expect(r.message).toContain("Cash-Burn-June.xlsx");
+  });
+
+  it("normalized match: 'monthly report' matches 'Monthly_Report_2026.xlsx'", () => {
+    const r = runCheck1({
+      ...base,
+      encryptionKeywords: kw("monthly report"),
+      attachments: [attachment("Monthly_Report_2026.xlsx", headerZipPlain)],
+    });
+    expect(r.severity).toBe("BLOCK");
+  });
+
+  it("normalized Hebrew match: 'קאש ברן' matches 'קאש-ברן-יוני.xlsx'", () => {
+    const r = runCheck1({
+      ...base,
+      encryptionKeywords: kw("קאש ברן"),
+      attachments: [attachment("קאש-ברן-יוני.xlsx", headerZipPlain)],
+    });
+    expect(r.severity).toBe("BLOCK");
+  });
+
+  it("PASSes when a keyword-matched file IS encrypted", () => {
+    const r = runCheck1({
+      ...base,
+      encryptionKeywords: kw("cash burn"),
+      attachments: [attachment("cashburn.xlsx", headerOLE2)],
+    });
+    expect(r.isValid).toBe(true);
+  });
+
+  it("ignores an inactive keyword", () => {
+    const r = runCheck1({
+      ...base,
+      encryptionKeywords: [{ id: "k", keyword: "payroll", note: "", active: false }],
+      attachments: [attachment("payroll.xlsx", headerZipPlain)],
+    });
+    expect(r.isValid).toBe(true);
   });
 });
