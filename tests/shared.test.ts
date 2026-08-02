@@ -64,4 +64,47 @@ describe("findCustomersInRecipients", () => {
     const found = findCustomersInRecipients(["finance@acme.com"], [inactive]);
     expect(found).toEqual([]);
   });
+
+  // Per-customer Dokka inboxes share one domain, so a Dokka entry under
+  // "דומיינים נוספים" — and ONLY such an entry — matches by full address.
+  describe("Dokka inboxes in additional domains", () => {
+    const aizome = customer({
+      id: "c-aizome",
+      customerName: "Aizome Technologies",
+      primaryDomain: "aizome.ai",
+      additionalDomains: ["aizome32@dokka.co.il"],
+    });
+    const whalo = customer({
+      id: "c-whalo",
+      customerName: "Whalo Games",
+      primaryDomain: "whalo.com",
+      additionalDomains: ["whalo-games12@dokka.co.il"],
+    });
+
+    it("matches the exact Dokka address", () => {
+      const found = findCustomersInRecipients(["aizome32@dokka.co.il"], [aizome, whalo]);
+      expect(found.map((c) => c.id)).toEqual(["c-aizome"]);
+    });
+
+    it("does not match another customer's inbox at the same shared domain", () => {
+      const found = findCustomersInRecipients(["someone-else@dokka.co.il"], [aizome, whalo]);
+      expect(found).toEqual([]);
+    });
+
+    it("leaves the customer's own domains matching by domain as before", () => {
+      const found = findCustomersInRecipients(["cfo@aizome.ai"], [aizome, whalo]);
+      expect(found.map((c) => c.id)).toEqual(["c-aizome"]);
+    });
+
+    it("does not apply full-address matching to non-Dokka entries", () => {
+      const other = customer({
+        id: "c-other",
+        customerName: "Other",
+        primaryDomain: "other.com",
+        additionalDomains: ["billing@partner.com"],
+      });
+      // A non-Dokka full address stays inert, exactly as before this rule.
+      expect(findCustomersInRecipients(["billing@partner.com"], [other])).toEqual([]);
+    });
+  });
 });

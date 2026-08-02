@@ -5,7 +5,7 @@
 import { Advisor, Customer, ExcludedRecipient, Exclusion, Exemption, Role } from "../models/customer.model";
 import { CheckResult } from "../models/dlp-result.model";
 import { INTERNAL_DOMAIN, SAFE_MODE } from "../shared/constants";
-import { findCustomersInRecipients, getRoleBypass, getUserPermission, recipientExclusionMatch } from "./shared";
+import { findCustomersInRecipients, getRoleBypass, getUserPermission, isSharedInboxEntry, recipientExclusionMatch } from "./shared";
 
 export interface Check3Input {
   subject: string;
@@ -152,10 +152,17 @@ function findUnknownDomains(
   excludedRecipients?: ExcludedRecipient[],
 ): string[] {
   const known = new Set<string>([INTERNAL_DOMAIN.toLowerCase()]);
+  // A Dokka inbox listed under "דומיינים נוספים" is known by full address, not
+  // by domain — dokka.co.il itself stays unknown. See isSharedInboxEntry.
+  const knownAddresses = new Set<string>();
 
   customers.forEach((c) => {
-    if (c.primaryDomain) known.add(c.primaryDomain.toLowerCase());
-    c.additionalDomains.forEach((d) => known.add(d.toLowerCase()));
+    if (c.primaryDomain) known.add(c.primaryDomain.trim().toLowerCase());
+    c.additionalDomains.forEach((d) => {
+      const e = d.trim().toLowerCase();
+      if (!e) return;
+      (isSharedInboxEntry(e) ? knownAddresses : known).add(e);
+    });
   });
   advisors.forEach((a) => {
     if (a.emailDomain) known.add(a.emailDomain.toLowerCase());
@@ -168,7 +175,7 @@ function findUnknownDomains(
   for (const r of recipients) {
     const domain = r.split("@")[1]?.toLowerCase();
     if (!domain) continue;
-    if (known.has(domain)) continue;
+    if (known.has(domain) || knownAddresses.has(r.trim().toLowerCase())) continue;
     // A recipient on the "מוחרגים" list is known/trusted — don't flag it as unknown.
     // recipientExclusionMatch honours EMAIL vs DOMAIN scope and expiry, so an
     // EMAIL-scope entry only clears that exact address, not the whole domain.

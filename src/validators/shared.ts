@@ -2,7 +2,7 @@
 // without coupling sibling validator files together.
 
 import { Customer, ExcludedRecipient, Exemption, ExemptionType, Role } from "../models/customer.model";
-import { INTERNAL_DOMAIN } from "../shared/constants";
+import { INTERNAL_DOMAIN, SHARED_INBOX_DOMAINS } from "../shared/constants";
 
 export type Permission = ExemptionType | "STANDARD";
 
@@ -98,6 +98,28 @@ export function getUserPermission(
 }
 
 /**
+ * True when an "additional domain" entry is a per-customer inbox at a shared
+ * document portal (Dokka) — i.e. a full address at a SHARED_INBOX_DOMAINS
+ * domain. Only these are matched by full address; see additionalDomainMatches.
+ */
+export function isSharedInboxEntry(entry: string): boolean {
+  const e = entry.trim().toLowerCase();
+  return e.includes("@") && SHARED_INBOX_DOMAINS.includes(domainOf(e));
+}
+
+/**
+ * True when a customer's "דומיינים נוספים" entry matches the recipient. A Dokka
+ * inbox is compared against the FULL address — matching only its domain would
+ * wrongly tie every Dokka customer to the same shared domain. Every other entry
+ * (and every primary domain) is compared as a plain domain, as before.
+ */
+export function additionalDomainMatches(entry: string, recipient: string): boolean {
+  const e = entry.trim().toLowerCase();
+  if (!e) return false;
+  return isSharedInboxEntry(e) ? e === recipient.trim().toLowerCase() : e === domainOf(recipient);
+}
+
+/**
  * Returns every ACTIVE customer whose primary or additional domain matches a
  * recipient. De-duplicated by customer id.
  */
@@ -117,12 +139,11 @@ export function findCustomersInRecipients(
 
     for (const c of customers) {
       if (c.status !== "ACTIVE") continue;
-      const customerDomains = [
-        c.primaryDomain?.toLowerCase(),
-        ...c.additionalDomains.map((d) => d.toLowerCase()),
-      ].filter(Boolean);
+      const matches =
+        c.primaryDomain?.trim().toLowerCase() === domain ||
+        c.additionalDomains.some((d) => additionalDomainMatches(d, r));
 
-      if (customerDomains.includes(domain) && !found.find((f) => f.id === c.id)) {
+      if (matches && !found.find((f) => f.id === c.id)) {
         found.push(c);
       }
     }

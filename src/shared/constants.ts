@@ -9,6 +9,13 @@ export const SAFE_MODE = false;
 // Internal organization domain — emails to this domain skip encryption checks
 export const INTERNAL_DOMAIN = "nextage.co.il";
 
+// Shared document-portal domains. Every customer has a DIFFERENT inbox at the
+// same domain (e.g. aizome32@dokka.co.il vs whalo-games12@dokka.co.il), so an
+// entry at one of these domains in a customer's "דומיינים נוספים" is matched by
+// FULL ADDRESS. Everything else — including every primary domain — keeps plain
+// domain matching.
+export const SHARED_INBOX_DOMAINS = ["dokka.co.il"];
+
 export const API_BASE_URL = "https://nextage-dlp-app-gchqasbzeqgkccf7.westeurope-01.azurewebsites.net/api";
 
 // Session cache TTL for config (60 minutes)
