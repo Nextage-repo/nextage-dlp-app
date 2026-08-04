@@ -18,6 +18,7 @@ import {
 import { EncryptionKeyword, Exclusion, Exemption, Role, Rule } from "../models/customer.model";
 import {
   ARCHIVE_EXTENSIONS_REGEX,
+  EMAIL_ITEM_EXTENSIONS_REGEX,
   IMAGE_EXTENSIONS_REGEX,
   INTERNAL_DOMAIN,
   MAGIC_BYTES,
@@ -67,6 +68,15 @@ export function filenameRequiresEncryption(
   });
 }
 
+// An attached email message (Outlook item). Office.js marks it attachmentType
+// "item"; a message saved to disk and re-attached comes in as .msg/.eml. These
+// NEVER require encryption — a forwarded email is not a document, so a keyword
+// in its subject (which becomes the attachment name) must not trigger Check 1.
+export function isEmailItem(att: AttachmentWithHeader): boolean {
+  if ((att.attachmentType ?? "").toLowerCase() === "item") return true;
+  return EMAIL_ITEM_EXTENSIONS_REGEX.test(att.name);
+}
+
 export function runCheck1(input: Check1Input): CheckResult {
   const { attachments, recipients, userEmail, exclusions, exemptions, subject, rules, roles, encryptionKeywords } = input;
 
@@ -113,7 +123,12 @@ export function runCheck1(input: Check1Input): CheckResult {
   // 6. Name-based enforcement ("דורשי הצפנה"): only attachments whose FILENAME
   // contains a configured keyword require encryption. Any other file passes — the
   // org opted into checking encryption by filename, not on every attachment.
-  const required = attachments.filter((att) => filenameRequiresEncryption(att.name, encryptionKeywords));
+  // Attached email messages (Outlook items / .msg / .eml) are excluded up front:
+  // their "filename" is the email subject, so a keyword there would otherwise
+  // block a plain forward that carries no document at all.
+  const required = attachments.filter(
+    (att) => !isEmailItem(att) && filenameRequiresEncryption(att.name, encryptionKeywords),
+  );
   if (required.length === 0) {
     return pass("אין קבצים הדורשים הצפנה לפי שם הקובץ");
   }

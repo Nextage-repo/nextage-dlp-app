@@ -73,6 +73,7 @@ export async function readAttachmentsWithHeaders(
         name: att.name,
         size: att.size ?? 0,
         isInline: att.isInline ?? false,
+        attachmentType: att.attachmentType as string | undefined,
         magicBytes: slice?.magicBytes ?? null,
         trailerBytes: slice?.trailerBytes ?? null,
       } satisfies AttachmentWithHeader;

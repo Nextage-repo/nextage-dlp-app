@@ -51,3 +51,9 @@ export const OFFICE_EXTENSIONS_REGEX = /\.(xlsx|docx|pptx)$/i;
 
 // PDF extension
 export const PDF_EXTENSION_REGEX = /\.pdf$/i;
+
+// Attached email messages (Outlook items). Office.js reports these with
+// attachmentType "item"; when they are saved/dragged in as files they carry a
+// .msg/.eml extension instead. Check 1 skips them entirely — a forwarded email
+// never requires encryption, even if its subject contains a keyword.
+export const EMAIL_ITEM_EXTENSIONS_REGEX = /\.(msg|eml)$/i;

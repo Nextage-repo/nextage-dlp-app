@@ -371,6 +371,40 @@ describe("runCheck1", () => {
     expect(r.isValid).toBe(true);
   });
 
+  // ---- attached email messages (Outlook items) never require encryption ----
+  it("skips an attached Outlook item even when its name matches a keyword", () => {
+    const r = runCheck1({
+      ...base,
+      encryptionKeywords: kw("payroll"),
+      attachments: [
+        attachment(" Euno, Inc - 07/30/2026 - Payroll", null, { attachmentType: "item" }),
+      ],
+    });
+    expect(r.isValid).toBe(true);
+    expect(r.message).toContain("אין קבצים הדורשים הצפנה");
+  });
+
+  it("skips .msg/.eml attachments matching a keyword", () => {
+    for (const name of ["Payroll June.msg", "payroll-thread.eml"]) {
+      const r = runCheck1({ ...base, encryptionKeywords: kw("payroll"), attachments: [attachment(name, null)] });
+      expect(r.isValid).toBe(true);
+    }
+  });
+
+  it("still BLOCKs a real unencrypted file attached alongside an email item", () => {
+    const r = runCheck1({
+      ...base,
+      encryptionKeywords: kw("payroll"),
+      attachments: [
+        attachment(" Euno, Inc - 07/30/2026 - Payroll", null, { attachmentType: "item" }),
+        attachment("07312026_Euno_Payroll Master.xlsx", headerZipPlain),
+      ],
+    });
+    expect(r.severity).toBe("BLOCK");
+    expect(r.message).toContain("07312026_Euno_Payroll Master.xlsx");
+    expect(r.message).not.toContain("07/30/2026");
+  });
+
   it("ignores an inactive keyword", () => {
     const r = runCheck1({
       ...base,

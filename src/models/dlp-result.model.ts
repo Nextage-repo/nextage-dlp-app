@@ -23,6 +23,10 @@ export interface AttachmentWithHeader {
   name: string;
   size: number;
   isInline: boolean;
+  // Office.js attachment kind: "file" | "item" | "cloud". "item" means an
+  // attached Outlook item (an email message). Optional so older callers/tests
+  // that don't set it keep working.
+  attachmentType?: string;
   magicBytes: Uint8Array | null;
   // Last ~8 KiB of the file. PDFs declare encryption with an /Encrypt entry in
   // the trailer at the END of the file, so the header alone is not enough.
