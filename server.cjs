@@ -165,12 +165,11 @@ app.use((req, res, next) => {
 });
 
 // ── Admin auth ───────────────────────────────────────────────────────────────
-// Two modes, switched by the SSO_ENABLED app setting:
-//   SSO_ENABLED=true  → Entra ID via App Service Easy Auth + membership in ADMIN_GROUP_ID
-//   otherwise         → legacy x-admin-password header (break-glass)
-// Easy Auth strips inbound X-MS-CLIENT-PRINCIPAL* headers, so the principal can't be forged.
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "nextage-admin-2025";
-const SSO_ENABLED = process.env.SSO_ENABLED === "true";
+// Entra ID only, via App Service Easy Auth: the caller must be signed in AND be a
+// member of the ADMIN_GROUP_ID security group. There is no password fallback.
+// Easy Auth strips inbound X-MS-CLIENT-PRINCIPAL* headers, so the principal can't
+// be forged — but that guarantee only holds while the App Service Authentication
+// module is enabled. Never run this app with it turned off.
 const ADMIN_GROUP_ID = (process.env.ADMIN_GROUP_ID || "").trim();
 
 function getPrincipal(req) {
@@ -197,21 +196,15 @@ function isAdminUser(p) {
 }
 
 function adminAuth(req, res, next) {
-  if (SSO_ENABLED) {
-    const p = getPrincipal(req);
-    if (!p) return res.status(401).json({ error: "Not signed in" });
-    if (!isAdminUser(p)) return res.status(403).json({ error: "Forbidden" });
-    req.adminUser = p;
-    return next();
-  }
-  const auth = req.headers["x-admin-password"];
-  if (auth !== ADMIN_PASSWORD) return res.status(401).json({ error: "Unauthorized" });
+  const p = getPrincipal(req);
+  if (!p) return res.status(401).json({ error: "Not signed in" });
+  if (!isAdminUser(p)) return res.status(403).json({ error: "Forbidden" });
+  req.adminUser = p;
   next();
 }
 
 // Guards the /admin page itself: redirects to sign-in instead of returning JSON.
 function adminPage(req, res, next) {
-  if (!SSO_ENABLED) return next();
   const p = getPrincipal(req);
   if (!p) {
     return res.redirect("/.auth/login/aad?post_login_redirect_uri=" + encodeURIComponent(req.originalUrl));
@@ -517,11 +510,6 @@ app.get("/admin", adminPage, (req, res) => {
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #1a1a2e; direction: rtl; }
-    #login-screen { display: flex; align-items: center; justify-content: center; height: 100vh; }
-    .login-box { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.12); width: 340px; text-align: center; }
-    .login-box h1 { font-size: 22px; margin-bottom: 8px; color: #0078d4; }
-    .login-box p { color: #666; margin-bottom: 24px; font-size: 14px; }
-    .login-box input { width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; margin-bottom: 14px; text-align: center; }
     .btn { padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; }
     .btn-primary { background: #0078d4; color: white; }
     .btn-primary:hover { background: #005fa3; }
@@ -530,7 +518,6 @@ app.get("/admin", adminPage, (req, res) => {
     .btn-success { background: #107c10; color: white; }
     .btn-success:hover { background: #0b5e0b; }
     .btn-sm { padding: 5px 12px; font-size: 12px; }
-    #app { display: none; }
     header { background: #0078d4; color: white; padding: 14px 28px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
     header h1 { font-size: 20px; font-weight: 700; }
     header span { font-size: 13px; opacity: 0.85; }
@@ -574,16 +561,6 @@ app.get("/admin", adminPage, (req, res) => {
   </style>
 </head>
 <body>
-
-<div id="login-screen">
-  <div class="login-box">
-    <h1>🔐 Nextage DLP Admin</h1>
-    <p>הכנס סיסמת מנהל כדי להמשיך</p>
-    <input type="password" id="pwd-input" placeholder="סיסמה" onkeydown="if(event.key==='Enter')login()"/>
-    <button class="btn btn-primary" style="width:100%" onclick="login()">כניסה</button>
-    <p id="login-error" style="color:#d13438;font-size:13px;margin-top:12px;display:none">סיסמה שגויה</p>
-  </div>
-</div>
 
 <div id="app">
   <header>
@@ -741,32 +718,12 @@ app.get("/admin", adminPage, (req, res) => {
 <div id="toast"></div>
 
 <script>
-const SSO = ${SSO_ENABLED};
-let PWD = "";
 let currentTable = "";
 let editingId = null;
 
-// With SSO the server already authorised us before rendering this page —
-// skip the password screen entirely. The Easy Auth cookie authorises the API calls.
-if (SSO) {
-  document.getElementById("login-screen").style.display = "none";
-  document.getElementById("app").style.display = "block";
-  loadAll();
-}
-
-function login() {
-  PWD = document.getElementById("pwd-input").value;
-  fetch("/api/admin/customers", { headers: { "x-admin-password": PWD } })
-    .then(r => {
-      if (r.status === 401) {
-        document.getElementById("login-error").style.display = "block";
-      } else {
-        document.getElementById("login-screen").style.display = "none";
-        document.getElementById("app").style.display = "block";
-        loadAll();
-      }
-    });
-}
+// The server already authorised this request before rendering the page, and the
+// Easy Auth cookie rides along on every fetch below — no client-side gate needed.
+loadAll();
 
 function showTab(name, btn) {
   document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
@@ -782,7 +739,7 @@ function loadAll() {
 }
 
 async function loadTable(name) {
-  const res = await fetch("/api/admin/" + name, { headers: { "x-admin-password": PWD } });
+  const res = await fetch("/api/admin/" + name);
   const data = await res.json();
   const tbody = document.getElementById("table-" + name);
   if (!data.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">אין נתונים</td></tr>'; return; }
@@ -912,7 +869,7 @@ async function loadAudit(reset) {
   const p = auditQueryString();
   p.set("limit", AUDIT_PAGE);
   p.set("offset", auditOffset);
-  const res = await fetch("/api/admin/audit?" + p.toString(), { headers: { "x-admin-password": PWD } });
+  const res = await fetch("/api/admin/audit?" + p.toString());
   const data = await res.json();
   const tbody = document.getElementById("table-audit");
   const html = auditRowsHtml(data);
@@ -933,7 +890,7 @@ function clearAuditFilter() {
 }
 
 async function exportAudit() {
-  const res = await fetch("/api/admin/audit.csv?" + auditQueryString().toString(), { headers: { "x-admin-password": PWD } });
+  const res = await fetch("/api/admin/audit.csv?" + auditQueryString().toString());
   if (!res.ok) { toast("ייצוא נכשל"); return; }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -1117,7 +1074,7 @@ async function saveModal() {
   const data = getFormData(currentTable);
   const url = "/api/admin/" + currentTable + (editingId ? "/" + editingId : "");
   const method = editingId ? "PUT" : "POST";
-  await fetch(url, { method, headers: { "Content-Type":"application/json", "x-admin-password": PWD }, body: JSON.stringify(data) });
+  await fetch(url, { method, headers: { "Content-Type":"application/json" }, body: JSON.stringify(data) });
   closeModal();
   loadTable(currentTable);
   toast(editingId ? "עודכן בהצלחה ✅" : "נוסף בהצלחה ✅");
@@ -1125,7 +1082,7 @@ async function saveModal() {
 
 async function deleteRow(table, id) {
   if (!confirm("האם למחוק?")) return;
-  await fetch("/api/admin/" + table + "/" + id, { method: "DELETE", headers: { "x-admin-password": PWD } });
+  await fetch("/api/admin/" + table + "/" + id, { method: "DELETE" });
   loadTable(table);
   toast("נמחק ✅");
 }

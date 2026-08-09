@@ -39,8 +39,8 @@ Azure Web App  "Nextage-dlp-app"   (Express: server.cjs, iisnode via web.config)
    ├── serves dist/  (taskpane.html, commands.js, taskpane.js, assets)
    ├── /api/config          (public GET — customers/advisors/exemptions/exclusions/rules)
    ├── /api/audit           (public POST — audit log)
-   ├── /api/admin/*         (CRUD, header: x-admin-password)
-   └── /admin               (password-protected knowledge-center UI)
+   ├── /api/admin/*         (CRUD, Entra ID SSO + admin group membership)
+   └── /admin               (knowledge-center UI, same SSO gate)
         │
         ▼
    PostgreSQL  (tables: customers, advisors, exemptions, exclusions, rules, audit_log)
@@ -48,8 +48,16 @@ Azure Web App  "Nextage-dlp-app"   (Express: server.cjs, iisnode via web.config)
 
 - **`server.cjs`** = the real backend (Express + `pg`). Entry point via **`web.config`**
   (iisnode `path="server.cjs"`). It `initDB()`s tables + seeds `rules` on startup.
-- Auth token in the client is `"no-auth"`; the API requires no user auth. `/api/admin/*`
-  is gated by the `x-admin-password` header only.
+- Auth token in the add-in client is `"no-auth"`; `/api/config` and `/api/audit` require
+  no user auth — the Outlook add-in depends on that.
+- **`/admin` and `/api/admin/*` require Entra ID sign-in** via App Service Easy Auth,
+  plus membership in the `DLP-Guard-Admins` security group (`ADMIN_GROUP_ID`). There is
+  no password fallback. Easy Auth strips inbound `X-MS-CLIENT-PRINCIPAL*` headers, which
+  is what makes the principal trustworthy — the app must never run with App Service
+  Authentication disabled.
+- App Service Authentication is set to **"Allow unauthenticated access"** on purpose:
+  switching it to "Require authentication" would lock the Outlook add-in out of
+  `/api/config` and break every DLP check.
 
 ---
 
@@ -60,15 +68,20 @@ Azure Web App  "Nextage-dlp-app"   (Express: server.cjs, iisnode via web.config)
 | GitHub repo | https://github.com/Nextage-repo/nextage-dlp-app.git (moved from `nextage-stack`) |
 | Azure Web App | `Nextage-dlp-app` |
 | Base URL | https://nextage-dlp-app-gchqasbzeqgkccf7.westeurope-01.azurewebsites.net |
-| Admin UI | `<base>/admin` |
-| Admin password | `nextage-admin-2025` (Azure env `ADMIN_PASSWORD`; override in portal) |
+| Admin UI | `<base>/admin` (Entra ID SSO — no password) |
+| Admin group | `DLP-Guard-Admins` — Object ID `ee0716e0-a233-47a1-8981-93b6d315425d` |
+| App registration | `Nextage-DLP-Admin` (client secret expires ~Aug 2028 — renew or `/admin` breaks) |
 | Config API | `<base>/api/config` |
 | Add-in GUID | `ce4a8dba-79dd-4a0a-89e7-bf6a29f0a527` |
 | Manifest version | `7.5.0.0` (SendMode="Block", Mailbox min 1.12) |
 
 **Azure App Settings the server needs:** `AZURE_POSTGRESQL_HOST`, `_DATABASE`, `_USER`,
-`_PASSWORD`, `_PORT`, and `ADMIN_PASSWORD`. These live only in the Azure portal
+`_PASSWORD`, `_PORT`, and `ADMIN_GROUP_ID`. These live only in the Azure portal
 (App Service → Settings → Environment variables), NOT in git.
+
+**To grant/revoke admin access:** add or remove the user from the `DLP-Guard-Admins`
+group in Entra ID. Nothing to deploy. `ADMIN_GROUP_ID` fails closed — if it is missing
+or empty, nobody can reach `/admin`.
 
 ---
 
