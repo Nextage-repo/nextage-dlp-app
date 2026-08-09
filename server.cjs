@@ -528,6 +528,12 @@ app.get("/admin", adminPage, (req, res) => {
     main { padding: 28px; max-width: 1100px; margin: 0 auto; }
     .card { background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.07); overflow: hidden; }
     .card-header { padding: 18px 24px; border-bottom: 1px solid #eee; display: flex; align-items: center; justify-content: space-between; }
+    .card-header { gap: 12px; flex-wrap: wrap; }
+    .header-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .search-box { padding: 7px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; font-family: inherit; width: 230px; }
+    .search-box:focus { outline: none; border-color: #0078d4; box-shadow: 0 0 0 3px rgba(0,120,212,0.1); }
+    .search-count { font-size: 12px; color: #888; white-space: nowrap; }
+    .search-count.filtered { color: #0078d4; font-weight: 600; }
     .card-header h2 { font-size: 17px; color: #1a1a2e; }
     table { width: 100%; border-collapse: collapse; }
     th { background: #f8f9fa; padding: 12px 16px; text-align: right; font-size: 13px; color: #555; font-weight: 600; border-bottom: 1px solid #eee; }
@@ -587,7 +593,11 @@ app.get("/admin", adminPage, (req, res) => {
       <div class="card">
         <div class="card-header">
           <h2>לקוחות</h2>
-          <button class="btn btn-success btn-sm" onclick="openModal('customers')">+ הוסף לקוח</button>
+          <div class="header-tools">
+            <span class="search-count" id="count-customers"></span>
+            <input type="search" class="search-box" id="search-customers" placeholder="🔍 חיפוש בטבלה..." oninput="filterTable('customers')" onkeydown="if(event.key==='Escape'){this.value='';filterTable('customers')}"/>
+            <button class="btn btn-success btn-sm" onclick="openModal('customers')">+ הוסף לקוח</button>
+          </div>
         </div>
         <table><thead><tr><th>שם</th><th>דומיין ראשי</th><th>כינויים</th><th>דומיינים</th><th>פעולות</th></tr></thead>
         <tbody id="table-customers"></tbody></table>
@@ -599,7 +609,11 @@ app.get("/admin", adminPage, (req, res) => {
       <div class="card">
         <div class="card-header">
           <h2>יועצים</h2>
-          <button class="btn btn-success btn-sm" onclick="openModal('advisors')">+ הוסף יועץ</button>
+          <div class="header-tools">
+            <span class="search-count" id="count-advisors"></span>
+            <input type="search" class="search-box" id="search-advisors" placeholder="🔍 חיפוש בטבלה..." oninput="filterTable('advisors')" onkeydown="if(event.key==='Escape'){this.value='';filterTable('advisors')}"/>
+            <button class="btn btn-success btn-sm" onclick="openModal('advisors')">+ הוסף יועץ</button>
+          </div>
         </div>
         <table><thead><tr><th>שם</th><th>אימייל</th><th>לקוחות מקושרים</th><th>פעולות</th></tr></thead>
         <tbody id="table-advisors"></tbody></table>
@@ -611,7 +625,11 @@ app.get("/admin", adminPage, (req, res) => {
       <div class="card">
         <div class="card-header">
           <h2>פטורים מ-DLP</h2>
-          <button class="btn btn-success btn-sm" onclick="openModal('exemptions')">+ הוסף פטור</button>
+          <div class="header-tools">
+            <span class="search-count" id="count-exemptions"></span>
+            <input type="search" class="search-box" id="search-exemptions" placeholder="🔍 חיפוש בטבלה..." oninput="filterTable('exemptions')" onkeydown="if(event.key==='Escape'){this.value='';filterTable('exemptions')}"/>
+            <button class="btn btn-success btn-sm" onclick="openModal('exemptions')">+ הוסף פטור</button>
+          </div>
         </div>
         <table><thead><tr><th>אימייל</th><th>סיבה</th><th>פעולות</th></tr></thead>
         <tbody id="table-exemptions"></tbody></table>
@@ -623,7 +641,11 @@ app.get("/admin", adminPage, (req, res) => {
       <div class="card">
         <div class="card-header">
           <h2>סיומות קבצים ללא הצפנה</h2>
-          <button class="btn btn-success btn-sm" onclick="openModal('exclusions')">+ הוסף סיומת</button>
+          <div class="header-tools">
+            <span class="search-count" id="count-exclusions"></span>
+            <input type="search" class="search-box" id="search-exclusions" placeholder="🔍 חיפוש בטבלה..." oninput="filterTable('exclusions')" onkeydown="if(event.key==='Escape'){this.value='';filterTable('exclusions')}"/>
+            <button class="btn btn-success btn-sm" onclick="openModal('exclusions')">+ הוסף סיומת</button>
+          </div>
         </div>
         <table><thead><tr><th>סיומת</th><th>סיבה</th><th>פעולות</th></tr></thead>
         <tbody id="table-exclusions"></tbody></table>
@@ -635,7 +657,11 @@ app.get("/admin", adminPage, (req, res) => {
       <div class="card">
         <div class="card-header">
           <h2>חוקים — פטור מהצפנה לפי נושא המייל</h2>
-          <button class="btn btn-success btn-sm" onclick="openModal('rules')">+ הוסף חוק</button>
+          <div class="header-tools">
+            <span class="search-count" id="count-rules"></span>
+            <input type="search" class="search-box" id="search-rules" placeholder="🔍 חיפוש בטבלה..." oninput="filterTable('rules')" onkeydown="if(event.key==='Escape'){this.value='';filterTable('rules')}"/>
+            <button class="btn btn-success btn-sm" onclick="openModal('rules')">+ הוסף חוק</button>
+          </div>
         </div>
         <table><thead><tr><th>ביטוי</th><th>שפה</th><th>סוג חוק</th><th>פעיל</th><th>פעולות</th></tr></thead>
         <tbody id="table-rules"></tbody></table>
@@ -647,7 +673,11 @@ app.get("/admin", adminPage, (req, res) => {
       <div class="card">
         <div class="card-header">
           <h2>תפקידים — פטור מבדיקות לפי תפקיד המשתמש</h2>
-          <button class="btn btn-success btn-sm" onclick="openModal('roles')">+ הוסף תפקיד</button>
+          <div class="header-tools">
+            <span class="search-count" id="count-roles"></span>
+            <input type="search" class="search-box" id="search-roles" placeholder="🔍 חיפוש בטבלה..." oninput="filterTable('roles')" onkeydown="if(event.key==='Escape'){this.value='';filterTable('roles')}"/>
+            <button class="btn btn-success btn-sm" onclick="openModal('roles')">+ הוסף תפקיד</button>
+          </div>
         </div>
         <table><thead><tr><th>שם תפקיד</th><th>אימיילים משויכים</th><th>בדיקות שמדולגות</th><th>פעיל</th><th>פעולות</th></tr></thead>
         <tbody id="table-roles"></tbody></table>
@@ -659,7 +689,11 @@ app.get("/admin", adminPage, (req, res) => {
       <div class="card">
         <div class="card-header">
           <h2>מוחרגים — נמענים/דומיינים שלא עוברים בדיקות DLP</h2>
-          <button class="btn btn-success btn-sm" onclick="openModal('excluded')">+ הוסף החרגה</button>
+          <div class="header-tools">
+            <span class="search-count" id="count-excluded"></span>
+            <input type="search" class="search-box" id="search-excluded" placeholder="🔍 חיפוש בטבלה..." oninput="filterTable('excluded')" onkeydown="if(event.key==='Escape'){this.value='';filterTable('excluded')}"/>
+            <button class="btn btn-success btn-sm" onclick="openModal('excluded')">+ הוסף החרגה</button>
+          </div>
         </div>
         <table><thead><tr><th>מייל</th><th>היקף</th><th>סיבה</th><th>תוקף</th><th>ביקש/ה</th><th>פעולות</th></tr></thead>
         <tbody id="table-excluded"></tbody></table>
@@ -671,7 +705,11 @@ app.get("/admin", adminPage, (req, res) => {
       <div class="card">
         <div class="card-header">
           <h2>דורשי הצפנה — קבצים שחייבים הצפנה לפי שם הקובץ</h2>
-          <button class="btn btn-success btn-sm" onclick="openModal('encwords')">+ הוסף מילה</button>
+          <div class="header-tools">
+            <span class="search-count" id="count-encwords"></span>
+            <input type="search" class="search-box" id="search-encwords" placeholder="🔍 חיפוש בטבלה..." oninput="filterTable('encwords')" onkeydown="if(event.key==='Escape'){this.value='';filterTable('encwords')}"/>
+            <button class="btn btn-success btn-sm" onclick="openModal('encwords')">+ הוסף מילה</button>
+          </div>
         </div>
         <p style="color:#666;font-size:13px;margin:0 0 12px">קובץ יידרש להיות מוצפן רק אם שם הקובץ מכיל אחת מהמילים הבאות. ההתאמה מתעלמת מרווחים, מקפים, קווים תחתונים ואותיות גדולות/קטנות. אם הרשימה ריקה — אף קובץ לא יידרש הצפנה.</p>
         <table><thead><tr><th>מילה</th><th>הערה</th><th>פעיל</th><th>פעולות</th></tr></thead>
@@ -687,6 +725,8 @@ app.get("/admin", adminPage, (req, res) => {
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input type="date" id="audit-date" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px"/>
             <input type="text" id="audit-user" placeholder="סינון לפי אימייל" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px" onkeydown="if(event.key==='Enter')applyAuditFilter()"/>
+            <input type="search" class="search-box" id="search-audit" placeholder="🔍 חיפוש בשורות שנטענו..." style="width:200px" oninput="filterTable('audit')" onkeydown="if(event.key==='Escape'){this.value='';filterTable('audit')}"/>
+            <span class="search-count" id="count-audit"></span>
             <button class="btn btn-primary btn-sm" onclick="applyAuditFilter()">🔍 סנן</button>
             <button class="btn btn-sm" onclick="clearAuditFilter()">נקה</button>
             <button class="btn btn-success btn-sm" onclick="exportAudit()">⬇️ ייצוא CSV</button>
@@ -734,6 +774,45 @@ function showTab(name, btn) {
   loadTable(name);
 }
 
+// ── Table search ─────────────────────────────────────────────────────────────
+// Filters the rendered rows in place — no refetch. Matches every word in the
+// query independently (order-free) against the row's data cells; the actions
+// column is excluded so "ערוך" doesn't match every row.
+function filterTable(name) {
+  const box = document.getElementById("search-" + name);
+  const tbody = document.getElementById("table-" + name);
+  const counter = document.getElementById("count-" + name);
+  if (!box || !tbody) return;
+
+  const terms = box.value.trim().toLowerCase().split(/\\s+/).filter(Boolean);
+  const rows = Array.from(tbody.querySelectorAll("tr")).filter(tr => !tr.dataset.placeholder);
+  let shown = 0;
+
+  rows.forEach(tr => {
+    if (!tr.dataset.haystack) {
+      tr.dataset.haystack = Array.from(tr.querySelectorAll("td:not(.actions)"))
+        .map(td => td.textContent).join(" ").replace(/\\s+/g, " ").toLowerCase();
+    }
+    const hit = terms.every(t => tr.dataset.haystack.includes(t));
+    tr.style.display = hit ? "" : "none";
+    if (hit) shown++;
+  });
+
+  const old = tbody.querySelector("tr[data-placeholder='noresults']");
+  if (old) old.remove();
+  if (terms.length && shown === 0 && rows.length) {
+    const tr = document.createElement("tr");
+    tr.dataset.placeholder = "noresults";
+    tr.innerHTML = '<td colspan="9" class="empty">לא נמצאו תוצאות עבור "' + esc(box.value.trim()) + '"</td>';
+    tbody.appendChild(tr);
+  }
+
+  if (counter) {
+    counter.textContent = terms.length ? shown + " מתוך " + rows.length : (rows.length ? rows.length + " רשומות" : "");
+    counter.classList.toggle("filtered", terms.length > 0 && shown < rows.length);
+  }
+}
+
 function loadAll() {
   loadTable("customers");
 }
@@ -742,7 +821,11 @@ async function loadTable(name) {
   const res = await fetch("/api/admin/" + name);
   const data = await res.json();
   const tbody = document.getElementById("table-" + name);
-  if (!data.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">אין נתונים</td></tr>'; return; }
+  if (!data.length) {
+    tbody.innerHTML = '<tr data-placeholder="empty"><td colspan="9" class="empty">אין נתונים</td></tr>';
+    filterTable(name);
+    return;
+  }
 
   if (name === "customers") {
     tbody.innerHTML = data.map(r => \`<tr>
@@ -831,6 +914,9 @@ async function loadTable(name) {
         <button class="btn btn-danger btn-sm" onclick='deleteRow("encwords",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
   }
+
+  // Rows were replaced, so the cached haystacks are gone — re-apply any active query.
+  filterTable(name);
 }
 
 // ── Audit log: filter by day / user, paging, CSV export ──────────────────────
@@ -874,12 +960,13 @@ async function loadAudit(reset) {
   const tbody = document.getElementById("table-audit");
   const html = auditRowsHtml(data);
   if (reset) {
-    tbody.innerHTML = html || '<tr><td colspan="4" class="empty">אין נתונים</td></tr>';
+    tbody.innerHTML = html || '<tr data-placeholder="empty"><td colspan="4" class="empty">אין נתונים</td></tr>';
   } else {
     tbody.innerHTML += html;
   }
   auditOffset += data.length;
   document.getElementById("audit-more").style.display = data.length < AUDIT_PAGE ? "none" : "";
+  filterTable("audit");
 }
 
 function applyAuditFilter() { loadAudit(true); }
