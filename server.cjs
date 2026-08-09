@@ -164,11 +164,68 @@ app.use((req, res, next) => {
   next();
 });
 
-// Simple admin auth middleware
+// ── Admin auth ───────────────────────────────────────────────────────────────
+// Two modes, switched by the SSO_ENABLED app setting:
+//   SSO_ENABLED=true  → Entra ID via App Service Easy Auth + membership in ADMIN_GROUP_ID
+//   otherwise         → legacy x-admin-password header (break-glass)
+// Easy Auth strips inbound X-MS-CLIENT-PRINCIPAL* headers, so the principal can't be forged.
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "nextage-admin-2025";
+const SSO_ENABLED = process.env.SSO_ENABLED === "true";
+const ADMIN_GROUP_ID = (process.env.ADMIN_GROUP_ID || "").trim();
+
+function getPrincipal(req) {
+  const raw = req.headers["x-ms-client-principal"];
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(Buffer.from(raw, "base64").toString("utf8"));
+    const claims = p.claims || [];
+    const vals = (t) => claims.filter(c => c.typ === t || c.typ.endsWith("/" + t)).map(c => c.val);
+    return {
+      email: (vals("preferred_username")[0] || vals("emailaddress")[0] || vals("upn")[0] || "").toLowerCase(),
+      name: vals("name")[0] || "",
+      groups: vals("groups")
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Fails closed: no group configured means nobody gets in.
+function isAdminUser(p) {
+  if (!p || !ADMIN_GROUP_ID) return false;
+  return p.groups.includes(ADMIN_GROUP_ID);
+}
+
 function adminAuth(req, res, next) {
+  if (SSO_ENABLED) {
+    const p = getPrincipal(req);
+    if (!p) return res.status(401).json({ error: "Not signed in" });
+    if (!isAdminUser(p)) return res.status(403).json({ error: "Forbidden" });
+    req.adminUser = p;
+    return next();
+  }
   const auth = req.headers["x-admin-password"];
   if (auth !== ADMIN_PASSWORD) return res.status(401).json({ error: "Unauthorized" });
+  next();
+}
+
+// Guards the /admin page itself: redirects to sign-in instead of returning JSON.
+function adminPage(req, res, next) {
+  if (!SSO_ENABLED) return next();
+  const p = getPrincipal(req);
+  if (!p) {
+    return res.redirect("/.auth/login/aad?post_login_redirect_uri=" + encodeURIComponent(req.originalUrl));
+  }
+  if (!isAdminUser(p)) {
+    return res.status(403).send(`<!DOCTYPE html>
+<html lang="he" dir="rtl"><head><meta charset="UTF-8"/><title>אין הרשאה</title></head>
+<body style="font-family:'Segoe UI',sans-serif;text-align:center;padding:80px 20px;background:#f5f6f8">
+  <h1 style="font-size:28px;color:#1a1a2e">⛔ אין הרשאה</h1>
+  <p style="color:#555;font-size:15px">המשתמש <b>${p.email}</b> אינו חבר בקבוצת מנהלי DLP Guard.</p>
+  <p style="margin-top:24px"><a href="/.auth/logout?post_logout_redirect_uri=%2Fadmin" style="color:#0078d4">התחבר עם משתמש אחר</a></p>
+</body></html>`);
+  }
+  req.adminUser = p;
   next();
 }
 
@@ -450,7 +507,7 @@ app.get("/api/admin/audit.csv", adminAuth, async (req, res) => {
 });
 
 // Admin UI
-app.get("/admin", (req, res) => {
+app.get("/admin", adminPage, (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
@@ -531,7 +588,9 @@ app.get("/admin", (req, res) => {
 <div id="app">
   <header>
     <h1>🛡️ Nextage DLP — ממשק ניהול</h1>
-    <span>מחובר כמנהל מערכת</span>
+    <span>${req.adminUser
+      ? `מחובר: ${req.adminUser.email} · <a href="/.auth/logout?post_logout_redirect_uri=%2Fadmin" style="color:#fff;text-decoration:underline">יציאה</a>`
+      : "מחובר כמנהל מערכת"}</span>
   </header>
   <nav>
     <button class="active" onclick="showTab('customers',this)">👥 לקוחות</button>
@@ -682,9 +741,18 @@ app.get("/admin", (req, res) => {
 <div id="toast"></div>
 
 <script>
+const SSO = ${SSO_ENABLED};
 let PWD = "";
 let currentTable = "";
 let editingId = null;
+
+// With SSO the server already authorised us before rendering this page —
+// skip the password screen entirely. The Easy Auth cookie authorises the API calls.
+if (SSO) {
+  document.getElementById("login-screen").style.display = "none";
+  document.getElementById("app").style.display = "block";
+  loadAll();
+}
 
 function login() {
   PWD = document.getElementById("pwd-input").value;
