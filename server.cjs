@@ -482,6 +482,10 @@ app.get("/api/admin/audit", adminAuth, async (req, res) => {
 });
 
 // CSV export of the filtered audit log (all matching rows, capped at 50k).
+function safeParse(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 app.get("/api/admin/audit.csv", adminAuth, async (req, res) => {
   const { whereSql, params } = buildAuditFilter(req.query);
   const r = await pool.query(
@@ -489,10 +493,20 @@ app.get("/api/admin/audit.csv", adminAuth, async (req, res) => {
     params,
   );
   const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
-  const lines = ["created_at,user_email,action,data"];
+  // `message` gets its own column so Excel users can read the alert without
+  // digging through the JSON blob.
+  const lines = ["created_at,user_email,action,message,data"];
   for (const row of r.rows) {
+    const parsed = typeof row.data === "string" ? safeParse(row.data) : (row.data ?? null);
+    const message = parsed && typeof parsed.message === "string" ? parsed.message : "";
     const data = typeof row.data === "string" ? row.data : JSON.stringify(row.data ?? "");
-    lines.push([esc(new Date(row.created_at).toISOString()), esc(row.user_email), esc(row.action), esc(data)].join(","));
+    lines.push([
+      esc(new Date(row.created_at).toISOString()),
+      esc(row.user_email),
+      esc(row.action),
+      esc(message),
+      esc(data),
+    ].join(","));
   }
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", 'attachment; filename="audit-log.csv"');
@@ -562,8 +576,10 @@ app.get("/admin", adminPage, (req, res) => {
     .section.active { display: block; }
     #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #107c10; color: white; padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; opacity: 0; transition: opacity 0.3s; z-index: 9999; pointer-events: none; }
     #toast.show { opacity: 1; }
-    .audit-time { font-size: 12px; color: #888; }
-    .audit-action { font-weight: 600; color: #0078d4; }
+    .audit-time { font-size: 12px; color: #888; white-space: nowrap; }
+    .audit-action { font-weight: 600; color: #0078d4; white-space: nowrap; }
+    .audit-msg { font-size: 13px; color: #1a1a2e; line-height: 1.45; white-space: pre-wrap; }
+    .audit-context { font-size: 11px; color: #999; margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -937,14 +953,29 @@ function esc(s) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// The מידע column shows the prompt text the user actually saw. Rows written before
+// the message was captured have no data.message, so fall back to the raw JSON.
 function auditRowsHtml(data) {
   return data.map(r => {
-    const detail = r.data ? JSON.stringify(r.data) : "";
+    const d = r.data || {};
+    const raw = r.data ? JSON.stringify(r.data) : "";
+    const msg = typeof d.message === "string" && d.message.trim() ? d.message.trim() : "";
+    const context = [
+      d.subject ? "נושא: " + d.subject : "",
+      (d.attachments && d.attachments.length) ? "קבצים: " + d.attachments.join(", ") : "",
+      (d.recipients && d.recipients.length) ? "נמענים: " + d.recipients.join(", ") : ""
+    ].filter(Boolean).join(" · ");
+
+    const cell = msg
+      ? \`<div class="audit-msg">\${esc(msg)}</div>\` +
+        (context ? \`<div class="audit-context">\${esc(context)}</div>\` : "")
+      : \`<span style="font-size:12px;color:#888">\${esc(raw.substring(0, 90))}</span>\`;
+
     return \`<tr>
       <td class="audit-time">\${esc(new Date(r.created_at).toLocaleString("he-IL"))}</td>
       <td>\${esc(r.user_email)}</td>
       <td class="audit-action">\${esc(r.action)}</td>
-      <td style="font-size:12px;color:#888" title="\${esc(detail)}">\${esc(detail.substring(0,90))}</td>
+      <td title="\${esc(raw)}">\${cell}</td>
       </tr>\`;
   }).join("");
 }
@@ -1227,10 +1258,13 @@ app.post("/api/audit", async (req, res) => {
     // check, result). Previously only `data` was persisted, and block/warning
     // entries don't set `data` — so the מידע column was always empty. Fall back to
     // assembling a detail object from the entry fields so the log is useful.
+    // `message` is the exact prompt text the user saw — keep it first so the admin
+    // log can show it instead of the raw check number.
     const data =
       b.data !== undefined && b.data !== null
         ? b.data
         : {
+            message: b.message,
             check: b.checkNumber,
             result: b.result,
             severity: b.severity,

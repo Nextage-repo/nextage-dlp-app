@@ -17,6 +17,9 @@ export interface AuditEntry {
   userEmail: string;
   action: AuditAction;
   checkNumber: 1 | 2 | 3 | 0; // 0 = aggregate event
+  // The exact text shown to the user in the block/warning prompt — the popup is
+  // built from the same CheckResult.message, so the log matches what they saw.
+  message?: string;
   result: AuditResult;
   recipientEmails: string[];
   attachmentNames: string[];

@@ -51,6 +51,7 @@ export class AuditService {
       userEmail: email.userEmail,
       action: "EXEMPTION_APPLIED",
       checkNumber: 1,
+      message: `פטור מהצפנה לפי חוק: «${expression}»`,
       result: "EXEMPTED",
       recipientEmails: email.recipients,
       attachmentNames: email.attachments.map((a) => a.name),
@@ -61,7 +62,13 @@ export class AuditService {
     // `data` is what the server persists (JSONB) — include the matched expression.
     await this.postEntry({
       ...entry,
-      data: { type: "ENCRYPTION_EXEMPT", expression, subject: email.subject, recipients: email.recipients },
+      data: {
+        type: "ENCRYPTION_EXEMPT",
+        message: `פטור מהצפנה לפי חוק: «${expression}»`,
+        expression,
+        subject: email.subject,
+        recipients: email.recipients,
+      },
     } as AuditEntry & { data: unknown })
       .catch((err) => console.warn("[Audit] exemption write failed:", err));
   }
@@ -84,6 +91,7 @@ export class AuditService {
         id: createId(),
         action: this.mapAction(r.severity, result.shouldBlock),
         checkNumber: r.check,
+        message: r.message,
         result: this.mapResult(r.severity),
         severity: r.severity,
       }));
