@@ -4,6 +4,12 @@ const { Pool } = require("pg");
 
 const app = express();
 
+// App Service terminates TLS and forwards to iisnode over plain HTTP, so without
+// this `req.protocol` reports "http" and the admin CORS origin below is built as
+// http://… — which matches no real browser origin. Trusting the proxy makes
+// req.protocol follow X-Forwarded-Proto and yields the correct https:// origin.
+app.set("trust proxy", true);
+
 // Audit-log retention. The client sends a `ttl` field, but nothing ever acted on
 // it — rows accumulated forever. purgeOldAuditRows() below enforces this instead.
 const RETENTION_DAYS = parseInt(process.env.AUDIT_RETENTION_DAYS || "90");
@@ -228,7 +234,14 @@ const rateBuckets = new Map();
 
 function rateLimit({ windowMs, max, name }) {
   return (req, res, next) => {
-    const ip = (req.headers["x-forwarded-for"] || "").toString().split(",")[0].trim()
+    // Take the LAST X-Forwarded-For entry, not the first. A client can send its
+    // own X-Forwarded-For and App Service appends the real peer address to it, so
+    // the leftmost value is attacker-controlled — keying on it would let a caller
+    // rotate that header and sidestep the limit entirely. The rightmost entry is
+    // the one App Service added. Port suffixes are stripped so the same client
+    // does not get a fresh bucket per source port.
+    const xff = (req.headers["x-forwarded-for"] || "").toString().split(",");
+    const ip = (xff[xff.length - 1] || "").trim().replace(/:\d+$/, "")
       || req.socket.remoteAddress
       || "unknown";
     const key = `${name}:${ip}`;
