@@ -4,14 +4,27 @@ const { Pool } = require("pg");
 
 const app = express();
 
-// PostgreSQL connection
+// Audit-log retention. The client sends a `ttl` field, but nothing ever acted on
+// it — rows accumulated forever. purgeOldAuditRows() below enforces this instead.
+const RETENTION_DAYS = parseInt(process.env.AUDIT_RETENTION_DAYS || "90");
+const PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+// PostgreSQL connection.
+//
+// SECURITY: `rejectUnauthorized: true` — the server's TLS certificate IS verified.
+// This used to be `false`, which encrypted the connection but accepted ANY
+// certificate, leaving it open to man-in-the-middle inside the Azure network.
+// No `ca` is supplied on purpose: Azure Database for PostgreSQL chains to
+// DigiCert Global Root G2 / Microsoft RSA Root CA 2017, both of which are in
+// Node's bundled Mozilla root store — so validation works without pinning a PEM
+// in the repo (and won't break when Azure rotates its intermediate certs).
 const pool = new Pool({
   host: process.env.AZURE_POSTGRESQL_HOST,
   database: process.env.AZURE_POSTGRESQL_DATABASE,
   user: process.env.AZURE_POSTGRESQL_USER,
   password: process.env.AZURE_POSTGRESQL_PASSWORD,
   port: parseInt(process.env.AZURE_POSTGRESQL_PORT || "5432"),
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: true }
 });
 
 // Create tables if they don't exist
@@ -152,17 +165,101 @@ async function initDB() {
 // request (Classic Outlook's JS-only send runtime cannot complete a preflight).
 // With the default (application/json only) those bodies were dropped, so audit
 // rows were written with null user/action and empty data.
-app.use(express.json({ type: ["application/json", "text/plain"] }));
+// `limit` caps the body at 64 KB. A legitimate audit entry is well under 4 KB;
+// without a cap an unauthenticated caller could push arbitrarily large bodies at
+// /api/audit (the endpoint cannot require auth — see the CORS note below).
+app.use(express.json({ type: ["application/json", "text/plain"], limit: "64kb" }));
 app.use(express.static(path.join(__dirname, "dist")));
 
-// CORS headers
+// ── Security headers ─────────────────────────────────────────────────────────
+// Set by hand rather than via helmet: the runtime dependency list is deliberately
+// just express + pg. A missing/pruned module here would crash server.cjs, and a
+// dead backend means /api/config fails, which makes every add-in fail OPEN (i.e.
+// silently disables DLP org-wide). Not worth the risk for six headers.
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
+  res.header("X-Content-Type-Options", "nosniff");
+  res.header("X-Frame-Options", "DENY");
+  res.header("Referrer-Policy", "no-referrer");
+  res.header("Cross-Origin-Opener-Policy", "same-origin");
+  res.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  res.removeHeader("X-Powered-By");
+  next();
+});
+
+// ── CORS ─────────────────────────────────────────────────────────────────────
+// Split by route class, because the two classes have opposite constraints:
+//
+// * /api/config + /api/audit MUST stay wildcard-open. Classic Outlook's JS-only
+//   OnMessageSend runtime can only issue CORS "simple" requests — it cannot
+//   complete a preflight — so these calls carry no Origin we can allow-list and
+//   no Authorization header. Wildcard is safe here specifically because these
+//   endpoints are credential-free: `*` makes browsers refuse to attach cookies,
+//   and neither endpoint reads a session. Abuse is limited to volume, which the
+//   rate limiter below handles.
+//
+// * /api/admin/* + /admin are session-authenticated via Easy Auth, so they must
+//   NOT be wildcard. They now reflect only this app's own origin, so a malicious
+//   page cannot read admin JSON (customer lists, the audit log) out of a signed-in
+//   admin's browser.
+app.use((req, res, next) => {
+  const isAdminRoute = req.path === "/admin" || req.path.startsWith("/api/admin");
+  if (isAdminRoute) {
+    res.header("Access-Control-Allow-Origin", `${req.protocol}://${req.get("host")}`);
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Credentials", "true");
+  } else {
+    res.header("Access-Control-Allow-Origin", "*");
+  }
   res.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
+
+// ── Rate limiting ────────────────────────────────────────────────────────────
+// Fixed-window in-memory counter, keyed by client IP. Dependency-free for the
+// same reason as the headers above.
+//
+// LIMITATION worth knowing: the counters live in this process, so limits are
+// per-instance. The Web App runs a single instance today; if it is ever scaled
+// out, the effective limit multiplies by the instance count. That is acceptable
+// for abuse-dampening (this is not a quota mechanism).
+const rateBuckets = new Map();
+
+function rateLimit({ windowMs, max, name }) {
+  return (req, res, next) => {
+    const ip = (req.headers["x-forwarded-for"] || "").toString().split(",")[0].trim()
+      || req.socket.remoteAddress
+      || "unknown";
+    const key = `${name}:${ip}`;
+    const now = Date.now();
+    const b = rateBuckets.get(key);
+    if (!b || now >= b.resetAt) {
+      rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    if (b.count >= max) {
+      res.header("Retry-After", Math.ceil((b.resetAt - now) / 1000));
+      return res.status(429).json({ error: "Too many requests" });
+    }
+    b.count++;
+    next();
+  };
+}
+
+// Evict expired buckets so the map cannot grow without bound (a spray of unique
+// source IPs would otherwise be a slow memory leak). `unref()` keeps this timer
+// from holding the event loop open.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, b] of rateBuckets) if (now >= b.resetAt) rateBuckets.delete(key);
+}, 10 * 60 * 1000).unref();
+
+// Config is fetched once per compose session and cached ~60 min client-side, so
+// a real user needs only a handful per hour. Audit gets more headroom: one email
+// can legitimately write several entries (one per failed check).
+const configLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, name: "config" });
+const auditLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, name: "audit" });
 
 // ── Admin auth ───────────────────────────────────────────────────────────────
 // Entra ID only, via App Service Easy Auth: the caller must be signed in AND be a
@@ -1221,17 +1318,31 @@ function toast(msg) {
 });
 
 // Config endpoint — reads from PostgreSQL
-app.get("/api/config", async (req, res) => {
+// This endpoint is unauthenticated by necessity (see the CORS note at the top), so
+// it must return the MINIMUM the add-in needs — nothing more.
+//
+// Columns are now listed explicitly instead of `SELECT *`, for two reasons:
+//   1. The free-text admin fields are no longer published. `exemptions.reason`,
+//      `exclusions.reason`, `excluded_recipients.reason`, `.requested_by` and
+//      `encryption_keywords.note` are operator notes ("פטור עבור קבצי התביעה של
+//      לקוח X") that no validator reads — only roles.role_name is used, in the
+//      exemption message. They were being served to anyone on the internet.
+//   2. `SELECT *` publishes any column added later by default. Explicit lists
+//      fail closed: a new column stays server-side until someone opts it in.
+//
+// The authoritative list of what the client consumes is the mapper in
+// src/services/config.service.ts — keep the two in sync when adding a field.
+app.get("/api/config", configLimiter, async (req, res) => {
   try {
     const [customers, advisors, exemptions, exclusions, rules, roles, excluded, encwords] = await Promise.all([
-      pool.query("SELECT * FROM customers"),
-      pool.query("SELECT * FROM advisors"),
-      pool.query("SELECT * FROM exemptions"),
-      pool.query("SELECT * FROM exclusions"),
-      pool.query("SELECT * FROM rules WHERE active = TRUE"),
-      pool.query("SELECT * FROM roles WHERE active = TRUE"),
-      pool.query("SELECT * FROM excluded_recipients WHERE expiry_date IS NULL OR expiry_date >= CURRENT_DATE"),
-      pool.query("SELECT * FROM encryption_keywords WHERE active = TRUE"),
+      pool.query("SELECT id, name, primary_domain, aliases, domains FROM customers"),
+      pool.query("SELECT id, name, email, linked_customers FROM advisors"),
+      pool.query("SELECT id, email FROM exemptions"),
+      pool.query("SELECT id, extension FROM exclusions"),
+      pool.query("SELECT id, expression, rule_type, active FROM rules WHERE active = TRUE"),
+      pool.query("SELECT id, role_name, assigned_emails, bypass_checks, active FROM roles WHERE active = TRUE"),
+      pool.query("SELECT id, email, scope, expiry_date FROM excluded_recipients WHERE expiry_date IS NULL OR expiry_date >= CURRENT_DATE"),
+      pool.query("SELECT id, keyword, active FROM encryption_keywords WHERE active = TRUE"),
     ]);
 
     res.json({
@@ -1250,8 +1361,31 @@ app.get("/api/config", async (req, res) => {
   }
 });
 
+// ── Audit input sanitisation ─────────────────────────────────────────────────
+// /api/audit is unauthenticated (see the CORS note at the top), so a caller can
+// post anything. Previously whatever arrived was stringified straight into JSONB,
+// so a single request could store megabytes of attacker-chosen content and the
+// admin log would render it. These helpers bound every field: strings are capped,
+// arrays are capped in length and per-element size, and unknown keys are dropped.
+const MAX_STR = 500;
+const MAX_ARR = 50;
+const AUDIT_ACTIONS = new Set([
+  "SEND_BLOCKED", "SEND_ALLOWED", "WARNING_SHOWN",
+  "EXEMPTION_APPLIED", "MANUAL_CHECK", "DLP_UNAVAILABLE",
+]);
+
+function str(v, max = MAX_STR) {
+  if (v === null || v === undefined) return null;
+  return String(v).slice(0, max);
+}
+
+function strArray(v) {
+  if (!Array.isArray(v)) return [];
+  return v.slice(0, MAX_ARR).map((x) => str(x));
+}
+
 // Audit endpoint
-app.post("/api/audit", async (req, res) => {
+app.post("/api/audit", auditLimiter, async (req, res) => {
   try {
     const b = req.body || {};
     // The client sends a rich entry (recipients, subject, attachments, severity,
@@ -1260,21 +1394,40 @@ app.post("/api/audit", async (req, res) => {
     // assembling a detail object from the entry fields so the log is useful.
     // `message` is the exact prompt text the user saw — keep it first so the admin
     // log can show it instead of the raw check number.
-    const data =
-      b.data !== undefined && b.data !== null
-        ? b.data
-        : {
-            message: b.message,
-            check: b.checkNumber,
-            result: b.result,
-            severity: b.severity,
-            subject: b.messageSubject,
-            recipients: b.recipientEmails,
-            attachments: b.attachmentNames,
-          };
+    //
+    // Every field is rebuilt through str()/strArray() rather than passed through, so
+    // only known keys with bounded sizes are persisted. `src` is the exemption
+    // payload when present (recordExemption) and the flat entry otherwise.
+    const src = b.data !== undefined && b.data !== null ? b.data : b;
+    const data = {
+      message: str(src.message ?? b.message, 1000),
+      check: Number.isInteger(b.checkNumber) ? b.checkNumber : null,
+      result: str(b.result, 20),
+      severity: str(b.severity, 20),
+      subject: str(src.subject ?? b.messageSubject),
+      recipients: strArray(src.recipients ?? b.recipientEmails),
+      attachments: strArray(src.attachments ?? b.attachmentNames),
+    };
+    // Carry the exemption-specific fields only when this really is one.
+    if (src.type === "ENCRYPTION_EXEMPT") {
+      data.type = "ENCRYPTION_EXEMPT";
+      data.expression = str(src.expression, 200);
+    }
+    // recordUnavailable() sends the failure cause under `details.reason`; it was
+    // being dropped on the floor before, which made DLP_UNAVAILABLE rows useless
+    // for diagnosing why enforcement failed open.
+    if (b.details && b.details.reason) data.reason = str(b.details.reason, 500);
+
+    // An unrecognised action would make the admin log unfilterable, so pin it to
+    // the known set instead of storing arbitrary text.
+    const action = AUDIT_ACTIONS.has(b.action) ? b.action : "UNKNOWN";
+    // Bounded, and only stored when it looks like an address at all.
+    const rawEmail = str(b.userEmail, 320);
+    const userEmail = rawEmail && rawEmail.includes("@") ? rawEmail.toLowerCase() : "unknown";
+
     await pool.query(
       "INSERT INTO audit_log (user_email, action, data) VALUES ($1, $2, $3)",
-      [b.userEmail, b.action, JSON.stringify(data)]
+      [userEmail, action, JSON.stringify(data)]
     );
     res.json({ ok: true });
   } catch (err) {
@@ -1283,53 +1436,37 @@ app.post("/api/audit", async (req, res) => {
   }
 });
 
-// Seed endpoint — loads exact test data from spec document
-app.post("/api/seed", async (req, res) => {
+// ⚠️ REMOVED (security): POST /api/seed used to TRUNCATE customers/advisors/
+// exemptions/exclusions and re-insert spec test data — with NO authentication.
+// Any unauthenticated caller could wipe the production config in one request,
+// which silently disables every DLP check org-wide. Nothing referenced it (not
+// the admin UI, not the add-in, not CI), so it was deleted rather than gated.
+// If test data is ever needed again, seed it from the /admin UI or a local
+// psql script — never from an unauthenticated HTTP route.
+
+// ── Audit-log retention ──────────────────────────────────────────────────────
+// The stated policy is 90 days, but nothing enforced it: the add-in sends a `ttl`
+// field that no code path ever read (a leftover from the original Cosmos DB design,
+// where Cosmos expired rows itself). On Postgres rows simply accumulated, so a log
+// holding sender addresses, recipients and subject lines was retained forever.
+//
+// DELETE is idempotent, so it stays correct if the Web App is ever scaled out and
+// several instances run this concurrently.
+async function purgeOldAuditRows() {
   try {
-    await pool.query(`
-      TRUNCATE customers, advisors, exemptions, exclusions RESTART IDENTITY CASCADE;
-    `);
-
-    // Customers — exact data from spec test scenarios
-    await pool.query(`
-      INSERT INTO customers (name, primary_domain, aliases, domains) VALUES
-        ('ClientCorp Inc',     'clientcorp.com',    ARRAY['ClientCorp','CC'],          ARRAY['clientcorp.com']),
-        ('Tech Solutions Ltd', 'techsol.co.il',     ARRAY['TechSol','TS'],             ARRAY['techsol.co.il']),
-        ('Global Finance',     'globalfinance.net', ARRAY['GF','Finance Corp'],        ARRAY['globalfinance.net']);
-    `);
-
-    // Advisors — domain-based (each advisor represents an external firm's domain)
-    await pool.query(`
-      INSERT INTO advisors (email, name, linked_customers) VALUES
-        ('consultant@advisor1.com', 'Advisor Test 1', ARRAY['ClientCorp Inc']),
-        ('consultant@advisor2.com', 'Advisor Test 2', ARRAY['Tech Solutions Ltd']),
-        ('consultant@advisor3.com', 'Advisor Test 3', ARRAY['Global Finance']);
-    `);
-
-    // Exemptions — only scenario 18 user has ALL_CHECKS bypass
-    await pool.query(`
-      INSERT INTO exemptions (email, reason) VALUES
-        ('test@randomdomain.com', 'ALL_CHECKS - בדיקת תרחיש 18');
-    `);
-
-    // Exclusions — file extensions that skip Check 1
-    // (images are already hardcoded in code, these are extras)
-    await pool.query(`
-      INSERT INTO exclusions (extension, reason) VALUES
-        ('pdf',  'PDF נבדק בנפרד'),
-        ('txt',  'טקסט לא רגיש'),
-        ('png',  'תמונה'),
-        ('jpg',  'תמונה'),
-        ('jpeg', 'תמונה'),
-        ('gif',  'תמונה');
-    `);
-
-    res.json({ ok: true, message: "Seeded with spec test data — all 20 scenarios ready!" });
+    const r = await pool.query(
+      `DELETE FROM audit_log WHERE created_at < NOW() - ($1 || ' days')::INTERVAL`,
+      [String(RETENTION_DAYS)],
+    );
+    if (r.rowCount > 0) {
+      console.log(`🧹 Audit retention: deleted ${r.rowCount} row(s) older than ${RETENTION_DAYS} days`);
+    }
   } catch (err) {
-    console.error("[Seed] error:", err.message);
-    res.status(500).json({ ok: false, error: err.message });
+    // Never throw: a failed purge must not take the backend down, because a dead
+    // backend makes every add-in fail open (DLP silently disabled).
+    console.error("[Retention] purge failed:", err.message);
   }
-});
+}
 
 // Serve taskpane for all other routes
 app.use((req, res) => {
@@ -1340,4 +1477,6 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   await initDB();
+  await purgeOldAuditRows();
+  setInterval(purgeOldAuditRows, PURGE_INTERVAL_MS).unref();
 });
