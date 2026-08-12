@@ -302,7 +302,14 @@ setInterval(() => {
 // A rejected /api/config is not a harmless retry: the add-in FAILS OPEN when it
 // cannot load config, so throttling our own users would silently switch DLP off
 // during the busiest sending hour of the week. That is strictly worse than the
-// flooding this is meant to dampen — these endpoints expose no user data.
+// flooding this is meant to dampen.
+//
+// Correction to an earlier version of this note, which claimed these endpoints
+// expose no user data: /api/config does. It returns advisor names and emails, the
+// exempt user's address, and the full excluded-recipient list — see the exposure
+// table in DLP-Guard-Security-Spec.docx. The limits below are still sized for
+// availability rather than confidentiality, and a single request retrieves
+// everything, so rate limiting is not a control against that exposure.
 //
 // So the limits are set to catch only obvious abuse, and /api/config degrades to
 // a cached copy instead of rejecting (see serveCachedConfig).
