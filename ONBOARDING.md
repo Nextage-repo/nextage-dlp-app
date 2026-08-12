@@ -50,6 +50,10 @@ Azure Web App  "Nextage-dlp-app"   (Express: server.cjs, iisnode via web.config)
   (iisnode `path="server.cjs"`). It `initDB()`s tables + seeds `rules` on startup.
 - Auth token in the add-in client is `"no-auth"`; `/api/config` and `/api/audit` require
   no user auth — the Outlook add-in depends on that.
+- **Because those two are public, they are hardened in other ways** (see §14):
+  generous per-IP rate limits, a 64 KB body cap, explicit column lists on
+  `/api/config`, and server-side field validation on `/api/audit`. Do not "tidy"
+  these away.
 - **`/admin` and `/api/admin/*` require Entra ID sign-in** via App Service Easy Auth,
   plus membership in the `DLP-Guard-Admins` security group (`ADMIN_GROUP_ID`). There is
   no password fallback. Easy Auth strips inbound `X-MS-CLIENT-PRINCIPAL*` headers, which
@@ -265,4 +269,49 @@ No redeploy needed.
 - Encryption detection extended to PDF (trailer /Encrypt) and HTML (org encryptor markers).
 - **חוקים** subject-based encryption exemption (table + seed + admin CRUD + Check 1 + audit).
 - Manifest: renamed (removed "(LOCAL)"), pointed to Azure, v7.5.0.0.
+- Security hardening pass (Aug 2026) — see §14.
 ```
+
+---
+
+## 14. Security hardening (Aug 2026) — don't undo these
+
+A security review produced the changes below. Each one exists for a reason that is
+not obvious from the code, so the reasoning is here as well as in `server.cjs`.
+
+| Change | Why |
+|---|---|
+| `POST /api/seed` **deleted** | It was unauthenticated and `TRUNCATE`d customers/advisors/exemptions/exclusions. One request could wipe the config and silently disable DLP org-wide. Never reintroduce an unauthenticated write route. |
+| Daily audit purge (`AUDIT_RETENTION_DAYS`, default 90) | The `ttl` field the client sends was never read — a leftover from the original Cosmos design. Rows with senders, recipients and subjects were kept forever. |
+| `ssl: { rejectUnauthorized: true }` | Was `false`: encrypted but accepted any certificate. No CA is pinned — Azure chains to roots already in Node's bundled store. |
+| Explicit column lists on `/api/config` | Stops publishing operator free-text (`exemptions.reason`, `excluded_recipients.reason`/`requested_by`, `encryption_keywords.note`) that no validator reads, and makes a future column fail closed. **Keep in sync with the mapper in `src/services/config.service.ts` — that mapper is the authoritative list of what the client consumes.** |
+| `/api/audit` field validation | Bodies were stringified straight into JSONB. Now: 64 KB cap, known keys only, per-field length caps, `action` pinned to a known set. |
+| Split CORS | Admin routes reflect only this app's origin so a malicious page can't read admin JSON from a signed-in admin's browser. The two public routes stay `*` — they're credential-free and the send runtime can't do preflight. |
+| `app.set("trust proxy", true)` | App Service terminates TLS and forwards over HTTP, so `req.protocol` was `http` and the admin CORS origin was built as `http://…` — an origin no browser sends. |
+| Rate-limit key = **last** `X-Forwarded-For` entry | App Service *appends* the real peer address, so the leftmost value is client-controlled; keying on it let a caller rotate the header and evade the limit. Verified: rotating XFF behaves identically to the control run. |
+| Limits are deliberately **high** (config 600/min, audit 1200/min) and `/api/config` **degrades to a cached copy instead of 429** | Everyone is behind one corporate NAT, so ~200 users share one IP, and the 60-minute client cache expires in waves. A rejected `/api/config` makes the add-in **fail open** — throttling our own users would silently disable DLP during the busiest sending hour. Measured: the old 60/min ceiling rejected 20 of 80 requests from one IP. |
+| Security headers set by hand, no `helmet`/`express-rate-limit` | Runtime deps stay `express` + `pg`. A missing/pruned module crashes `server.cjs`, and a dead backend makes every add-in fail open. Not worth it for six headers. |
+
+**Verifying after a deploy** — the DB-certificate change is the one that could break
+things, and its failure mode is quiet (500 → every add-in fails open):
+
+```bash
+curl -s <base>/api/config | head -c 200        # real data => TLS + DB fine
+curl -sD - -o /dev/null <base>/api/config | grep -i x-config-cache   # memo alive
+```
+
+### Known open items (not fixed)
+
+- **Admin UI stores config rows into `innerHTML` unescaped** (`${r.name}`, aliases,
+  domains, `reason`, `requested_by`, `keyword`, `note` in the table renderers) and
+  interpolates `JSON.stringify(r)` into a single-quoted `onclick`. The audit-log
+  renderer *is* escaped via `esc()`; the config tables are not. Admin-writable only,
+  but customer rows arrive via spreadsheet import, so treat it as untrusted input.
+- **`/api/admin/audit.csv` does not neutralise formula injection.** Fields are quoted
+  but a leading `=`/`+`/`-`/`@` still evaluates in Excel, and audit content is
+  writable by *unauthenticated* callers via `/api/audit`.
+- **`DLP_UNAVAILABLE` is logged but nothing alerts on it** — nobody finds out when
+  enforcement started failing open.
+- **12 excluded recipients are DOMAIN-scoped with 2030 expiry**, so all three checks
+  are skipped for any address at those domains and no audit row is written. Policy
+  decision, tracked in `DLP-Guard-Security-Spec.docx`.
