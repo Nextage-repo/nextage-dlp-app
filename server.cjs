@@ -999,60 +999,65 @@ async function loadTable(name) {
     return;
   }
 
+  // Every row value below goes through esc(). These fields are admin-written, but
+  // customer rows are bulk-imported from a spreadsheet, so treat them as untrusted:
+  // an unescaped value like <img src=x onerror=...> in a customer name would run in
+  // the browser of every other admin who opens this page, with their session.
+  // Row ids go through Number() so only a numeric literal can land in the handler.
   if (name === "customers") {
     tbody.innerHTML = data.map(r => \`<tr>
-      <td><strong>\${r.name}</strong></td>
-      <td>\${r.primary_domain ? \`<span class="tag tag-green">\${r.primary_domain}</span>\` : '<span style="color:#aaa">—</span>'}</td>
-      <td>\${(r.aliases||[]).map(a=>\`<span class="tag tag-gray">\${a}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
-      <td>\${(r.domains||[]).map(d=>\`<span class="tag">\${d}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
+      <td><strong>\${esc(r.name)}</strong></td>
+      <td>\${r.primary_domain ? \`<span class="tag tag-green">\${esc(r.primary_domain)}</span>\` : '<span style="color:#aaa">—</span>'}</td>
+      <td>\${(r.aliases||[]).map(a=>\`<span class="tag tag-gray">\${esc(a)}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
+      <td>\${(r.domains||[]).map(d=>\`<span class="tag">\${esc(d)}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick='editRow("customers",\${attrJson(r)})'>✏️ ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick='deleteRow("customers",\${r.id})'>🗑️</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("customers",\${Number(r.id)})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "advisors") {
     tbody.innerHTML = data.map(r => \`<tr>
-      <td><strong>\${r.name}</strong></td>
-      <td>\${r.email}</td>
-      <td>\${(r.linked_customers||[]).map(c=>\`<span class="tag tag-green">\${c}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
+      <td><strong>\${esc(r.name)}</strong></td>
+      <td>\${esc(r.email)}</td>
+      <td>\${(r.linked_customers||[]).map(c=>\`<span class="tag tag-green">\${esc(c)}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick='editRow("advisors",\${attrJson(r)})'>✏️ ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick='deleteRow("advisors",\${r.id})'>🗑️</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("advisors",\${Number(r.id)})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "exemptions") {
     tbody.innerHTML = data.map(r => \`<tr>
-      <td>\${r.email}</td>
-      <td>\${r.reason||""}</td>
+      <td>\${esc(r.email)}</td>
+      <td>\${esc(r.reason||"")}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick='editRow("exemptions",\${attrJson(r)})'>✏️ ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick='deleteRow("exemptions",\${r.id})'>🗑️</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("exemptions",\${Number(r.id)})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "exclusions") {
     tbody.innerHTML = data.map(r => \`<tr>
-      <td><span class="tag tag-gray">.\${r.extension}</span></td>
-      <td>\${r.reason||""}</td>
+      <td><span class="tag tag-gray">.\${esc(r.extension)}</span></td>
+      <td>\${esc(r.reason||"")}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick='editRow("exclusions",\${attrJson(r)})'>✏️ ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick='deleteRow("exclusions",\${r.id})'>🗑️</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("exclusions",\${Number(r.id)})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "rules") {
     tbody.innerHTML = data.map(r => \`<tr>
-      <td><strong>\${r.expression}</strong></td>
-      <td>\${r.language||""}</td>
-      <td><span class="tag">\${r.rule_type||""}</span></td>
+      <td><strong>\${esc(r.expression)}</strong></td>
+      <td>\${esc(r.language||"")}</td>
+      <td><span class="tag">\${esc(r.rule_type||"")}</span></td>
       <td>\${r.active ? '<span class="tag tag-green">פעיל</span>' : '<span class="tag tag-gray">לא פעיל</span>'}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick='editRow("rules",\${attrJson(r)})'>✏️ ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick='deleteRow("rules",\${r.id})'>🗑️</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("rules",\${Number(r.id)})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "roles") {
     tbody.innerHTML = data.map(r => \`<tr>
-      <td><strong>\${r.role_name}</strong></td>
-      <td>\${(r.assigned_emails||[]).map(e=>\`<span class="tag">\${e}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
-      <td>\${(r.bypass_checks||[]).map(c=>\`<span class="tag tag-gray">\${checkLabel(c)}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
+      <td><strong>\${esc(r.role_name)}</strong></td>
+      <td>\${(r.assigned_emails||[]).map(e=>\`<span class="tag">\${esc(e)}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
+      <td>\${(r.bypass_checks||[]).map(c=>\`<span class="tag tag-gray">\${esc(checkLabel(c))}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
       <td>\${r.active ? '<span class="tag tag-green">פעיל</span>' : '<span class="tag tag-gray">לא פעיל</span>'}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick='editRow("roles",\${attrJson(r)})'>✏️ ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick='deleteRow("roles",\${r.id})'>🗑️</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("roles",\${Number(r.id)})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "excluded") {
     const today = new Date(); today.setHours(0,0,0,0);
@@ -1063,27 +1068,27 @@ async function loadTable(name) {
         : '<span class="tag tag-gray">מייל בלבד</span>';
       const validTag = !r.expiry_date
         ? '<span class="tag tag-green">ללא תפוגה</span>'
-        : (expired ? \`<span class="tag tag-red">פג (\${new Date(r.expiry_date).toLocaleDateString("he-IL")})</span>\`
-                   : \`<span class="tag">\${new Date(r.expiry_date).toLocaleDateString("he-IL")}</span>\`);
+        : (expired ? \`<span class="tag tag-red">פג (\${esc(new Date(r.expiry_date).toLocaleDateString("he-IL"))})</span>\`
+                   : \`<span class="tag">\${esc(new Date(r.expiry_date).toLocaleDateString("he-IL"))}</span>\`);
       return \`<tr>
-      <td><strong>\${r.email}</strong></td>
+      <td><strong>\${esc(r.email)}</strong></td>
       <td>\${scopeTag}</td>
-      <td>\${r.reason||""}</td>
+      <td>\${esc(r.reason||"")}</td>
       <td>\${validTag}</td>
-      <td>\${r.requested_by||""}</td>
+      <td>\${esc(r.requested_by||"")}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick='editRow("excluded",\${attrJson(r)})'>✏️ ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick='deleteRow("excluded",\${r.id})'>🗑️</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("excluded",\${Number(r.id)})'>🗑️</button>
       </td></tr>\`;
     }).join("");
   } else if (name === "encwords") {
     tbody.innerHTML = data.map(r => \`<tr>
-      <td><strong>\${r.keyword}</strong></td>
-      <td>\${r.note||""}</td>
+      <td><strong>\${esc(r.keyword)}</strong></td>
+      <td>\${esc(r.note||"")}</td>
       <td>\${r.active ? '<span class="tag tag-green">פעיל</span>' : '<span class="tag tag-gray">לא פעיל</span>'}</td>
       <td class="actions">
         <button class="btn btn-primary btn-sm" onclick='editRow("encwords",\${attrJson(r)})'>✏️ ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick='deleteRow("encwords",\${r.id})'>🗑️</button>
+        <button class="btn btn-danger btn-sm" onclick='deleteRow("encwords",\${Number(r.id)})'>🗑️</button>
       </td></tr>\`).join("");
   }
 
@@ -1209,38 +1214,38 @@ function tableLabel(t) {
 function buildForm(table, row) {
   if (table === "customers") return \`
     <div class="form-group"><label>שם לקוח</label>
-      <input id="f-name" value="\${row?.name||""}" placeholder="בנק לאומי"/></div>
+      <input id="f-name" value="\${esc(row?.name||"")}" placeholder="בנק לאומי"/></div>
     <div class="form-group"><label>דומיין ראשי</label>
-      <input id="f-primary-domain" value="\${row?.primary_domain||""}" placeholder="leumi.co.il"/>
+      <input id="f-primary-domain" value="\${esc(row?.primary_domain||"")}" placeholder="leumi.co.il"/>
       <small>הדומיין הרשמי העיקרי של הלקוח</small></div>
     <div class="form-group"><label>כינויים (Aliases)</label>
-      <input id="f-aliases" value="\${(row?.aliases||[]).join(", ")}" placeholder="bankleumi.co.il, leumi.com"/>
+      <input id="f-aliases" value="\${esc((row?.aliases||[]).join(", "))}" placeholder="bankleumi.co.il, leumi.com"/>
       <small>שמות חלופיים — הפרד בפסיק</small></div>
     <div class="form-group"><label>דומיינים נוספים</label>
-      <input id="f-domains" value="\${(row?.domains||[]).join(", ")}" placeholder="leumi.co.il, bankleumi.co.il"/>
+      <input id="f-domains" value="\${esc((row?.domains||[]).join(", "))}" placeholder="leumi.co.il, bankleumi.co.il"/>
       <small>כל הדומיינים לבדיקת DLP — הפרד בפסיק</small></div>\`;
   if (table === "advisors") return \`
     <div class="form-group"><label>שם</label>
-      <input id="f-name" value="\${row?.name||""}" placeholder="ישראל ישראלי"/></div>
+      <input id="f-name" value="\${esc(row?.name||"")}" placeholder="ישראל ישראלי"/></div>
     <div class="form-group"><label>אימייל</label>
-      <input id="f-email" value="\${row?.email||""}" placeholder="name@nextage.co.il"/></div>
+      <input id="f-email" value="\${esc(row?.email||"")}" placeholder="name@nextage.co.il"/></div>
     <div class="form-group"><label>לקוחות מקושרים</label>
-      <input id="f-linked" value="\${(row?.linked_customers||[]).join(", ")}" placeholder="בנק לאומי, מגדל ביטוח"/>
+      <input id="f-linked" value="\${esc((row?.linked_customers||[]).join(", "))}" placeholder="בנק לאומי, מגדל ביטוח"/>
       <small>שמות לקוחות מדויקים כפי שמופיעים בטבלת לקוחות — הפרד בפסיק</small></div>\`;
   if (table === "exemptions") return \`
     <div class="form-group"><label>אימייל</label>
-      <input id="f-email" value="\${row?.email||""}" placeholder="name@nextage.co.il"/></div>
+      <input id="f-email" value="\${esc(row?.email||"")}" placeholder="name@nextage.co.il"/></div>
     <div class="form-group"><label>סיבה</label>
-      <input id="f-reason" value="\${row?.reason||""}" placeholder="מנהל מערכת"/></div>\`;
+      <input id="f-reason" value="\${esc(row?.reason||"")}" placeholder="מנהל מערכת"/></div>\`;
   if (table === "exclusions") return \`
     <div class="form-group"><label>סיומת קובץ</label>
-      <input id="f-extension" value="\${row?.extension||""}" placeholder="pdf"/>
+      <input id="f-extension" value="\${esc(row?.extension||"")}" placeholder="pdf"/>
       <small>ללא נקודה</small></div>
     <div class="form-group"><label>סיבה</label>
-      <input id="f-reason" value="\${row?.reason||""}" placeholder="PDF מוגן בנפרד"/></div>\`;
+      <input id="f-reason" value="\${esc(row?.reason||"")}" placeholder="PDF מוגן בנפרד"/></div>\`;
   if (table === "rules") return \`
     <div class="form-group"><label>ביטוי (Expression)</label>
-      <input id="f-expression" value="\${row?.expression||""}" placeholder="חשבונית ספק"/>
+      <input id="f-expression" value="\${esc(row?.expression||"")}" placeholder="חשבונית ספק"/>
       <small>מחרוזת שתיבדק כתת-מחרוזת בתוך נושא המייל (לא תלוי רישיות)</small></div>
     <div class="form-group"><label>שפה</label>
       <select id="f-language">
@@ -1248,7 +1253,7 @@ function buildForm(table, row) {
         <option value="English" \${row?.language==="English"?"selected":""}>English</option>
       </select></div>
     <div class="form-group"><label>סוג חוק</label>
-      <input id="f-rule-type" value="\${row?.rule_type||"Encryption Exemption"}"/>
+      <input id="f-rule-type" value="\${esc(row?.rule_type||"Encryption Exemption")}"/>
       <small>ברירת מחדל: Encryption Exemption</small></div>
     <div class="form-group"><label>פעיל</label>
       <select id="f-active">
@@ -1257,9 +1262,9 @@ function buildForm(table, row) {
       </select></div>\`;
   if (table === "roles") { const bc = row?.bypass_checks || []; return \`
     <div class="form-group"><label>שם תפקיד</label>
-      <input id="f-role-name" value="\${row?.role_name||""}" placeholder="CFO"/></div>
+      <input id="f-role-name" value="\${esc(row?.role_name||"")}" placeholder="CFO"/></div>
     <div class="form-group"><label>אימיילים משויכים</label>
-      <input id="f-assigned-emails" value="\${(row?.assigned_emails||[]).join(", ")}" placeholder="cfo@nextage.co.il, name@nextage.co.il"/>
+      <input id="f-assigned-emails" value="\${esc((row?.assigned_emails||[]).join(", "))}" placeholder="cfo@nextage.co.il, name@nextage.co.il"/>
       <small>כתובות המייל שמשויכות לתפקיד — הפרד בפסיק</small></div>
     <div class="form-group"><label>בדיקות שמדולגות</label>
       <div style="display:flex;gap:16px;padding:4px 0">
@@ -1275,7 +1280,7 @@ function buildForm(table, row) {
       </select></div>\`; }
   if (table === "excluded") { const exp = row?.expiry_date ? String(row.expiry_date).substring(0,10) : ""; return \`
     <div class="form-group"><label>מייל חיצוני</label>
-      <input id="f-email" value="\${row?.email||""}" placeholder="partner@bigcorp.com"/>
+      <input id="f-email" value="\${esc(row?.email||"")}" placeholder="partner@bigcorp.com"/>
       <small>כתובת המייל החיצונית להחרגה</small></div>
     <div class="form-group"><label>היקף ההחרגה</label>
       <select id="f-scope">
@@ -1284,18 +1289,18 @@ function buildForm(table, row) {
       </select>
       <small>"כל הדומיין" מחריג כל כתובת בדומיין של המייל שהוזן</small></div>
     <div class="form-group"><label>סיבה להחרגה</label>
-      <input id="f-reason" value="\${row?.reason||""}" placeholder="שותף עסקי מאובטח"/></div>
+      <input id="f-reason" value="\${esc(row?.reason||"")}" placeholder="שותף עסקי מאובטח"/></div>
     <div class="form-group"><label>תאריך תוקף</label>
-      <input type="date" id="f-expiry" value="\${exp}"/>
+      <input type="date" id="f-expiry" value="\${esc(exp)}"/>
       <small>לאחר תאריך זה ההחרגה אינה פעילה. השאר ריק ללא תפוגה.</small></div>
     <div class="form-group"><label>מי ביקש/ה את ההחרגה</label>
-      <input id="f-requested-by" value="\${row?.requested_by||""}" placeholder="שם המבקש/ת"/></div>\`; }
+      <input id="f-requested-by" value="\${esc(row?.requested_by||"")}" placeholder="שם המבקש/ת"/></div>\`; }
   if (table === "encwords") return \`
     <div class="form-group"><label>מילה בשם הקובץ</label>
-      <input id="f-keyword" value="\${row?.keyword||""}" placeholder="cash burn"/>
+      <input id="f-keyword" value="\${esc(row?.keyword||"")}" placeholder="cash burn"/>
       <small>קובץ שֵשמו מכיל מילה זו יידרש להיות מוצפן. מתעלם מרווחים, מקפים ואותיות גדולות/קטנות.</small></div>
     <div class="form-group"><label>הערה</label>
-      <input id="f-note" value="\${row?.note||""}" placeholder="דוח קאש ברן"/></div>
+      <input id="f-note" value="\${esc(row?.note||"")}" placeholder="דוח קאש ברן"/></div>
     <div class="form-group"><label>פעיל</label>
       <select id="f-active">
         <option value="true" \${row?.active!==false?"selected":""}>כן</option>
