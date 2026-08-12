@@ -300,18 +300,45 @@ curl -s <base>/api/config | head -c 200        # real data => TLS + DB fine
 curl -sD - -o /dev/null <base>/api/config | grep -i x-config-cache   # memo alive
 ```
 
+### Output-escaping rules for the admin page (added in the second pass)
+
+The admin page builds HTML by string concatenation, so escaping is manual and easy
+to lose. Three helpers, three contexts — use the right one:
+
+| Context | Helper | Example |
+|---|---|---|
+| Text inside an element | `esc(v)` | `<td>\${esc(r.name)}</td>` |
+| A quoted HTML attribute | `esc(v)` | `<input value="\${esc(row?.name\|\|"")}"/>` |
+| A row object inside a single-quoted handler | `attrJson(o)` | `onclick='editRow("customers",\${attrJson(r)})'` |
+| A row id in a handler | `Number(v)` | `onclick='deleteRow("customers",\${Number(r.id)})'` |
+
+`JSON.stringify` is **not** sufficient for the third case — it leaves apostrophes
+intact, which closes a single-quoted attribute. `checkLabel()` falls through to
+`String(n)`, so its output needs escaping too.
+
+Config rows are admin-written but arrive via spreadsheet import, so treat them as
+untrusted. `/api/admin/audit.csv` prefixes any field starting with `=`/`+`/`-`/`@`
+or a tab/CR with an apostrophe, because Excel evaluates formulas even inside quoted
+CSV fields and audit content is writable by *unauthenticated* callers.
+
+**Testing the admin page:** `node --check` is not enough — it passes on a template
+literal whose interpolation throws at render time (a lost `\$` escape does exactly
+this). Render it for real:
+
+```bash
+PRINC=$(node -e 'console.log(Buffer.from(JSON.stringify({claims:[{typ:"preferred_username",val:"t@nextage.co.il"},{typ:"groups",val:"tg"}]})).toString("base64"))')
+PORT=3995 ADMIN_GROUP_ID=tg node server.cjs &
+curl -s -H "X-MS-CLIENT-PRINCIPAL: $PRINC" http://127.0.0.1:3995/admin | wc -c   # expect ~40 KB, not a redirect
+```
+
+Note `/admin` **redirects to sign-in when unauthenticated**, so any check that greps
+the page for a marker without a principal header will always "fail" — that is a
+broken test, not a broken deploy.
+
 ### Known open items (not fixed)
 
-- **Admin UI stores config rows into `innerHTML` unescaped** (`${r.name}`, aliases,
-  domains, `reason`, `requested_by`, `keyword`, `note` in the table renderers) and
-  interpolates `JSON.stringify(r)` into a single-quoted `onclick`. The audit-log
-  renderer *is* escaped via `esc()`; the config tables are not. Admin-writable only,
-  but customer rows arrive via spreadsheet import, so treat it as untrusted input.
-- **`/api/admin/audit.csv` does not neutralise formula injection.** Fields are quoted
-  but a leading `=`/`+`/`-`/`@` still evaluates in Excel, and audit content is
-  writable by *unauthenticated* callers via `/api/audit`.
 - **`DLP_UNAVAILABLE` is logged but nothing alerts on it** — nobody finds out when
-  enforcement started failing open.
+  enforcement started failing open. Needs an Azure alert rule, not code.
 - **12 excluded recipients are DOMAIN-scoped with 2030 expiry**, so all three checks
   are skipped for any address at those domains and no audit row is written. Policy
   decision, tracked in `DLP-Guard-Security-Spec.docx`.
