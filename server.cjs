@@ -1513,6 +1513,18 @@ app.post("/api/audit", auditLimiter, async (req, res) => {
     const rawEmail = str(b.userEmail, 320);
     const userEmail = rawEmail && rawEmail.includes("@") ? rawEmail.toLowerCase() : "unknown";
 
+    // Emit a distinctive line to the server log for the one action that means
+    // enforcement stopped working. The audit row alone is not enough: nothing reads
+    // the table, so a silent failure stayed invisible until someone happened to open
+    // the admin log. This marker is what an Azure alert rule matches on — keep the
+    // string stable, an alert rule depends on it. Logged BEFORE the insert so a DB
+    // failure cannot swallow the signal.
+    if (action === "DLP_UNAVAILABLE") {
+      console.error(
+        `DLP_ENFORCEMENT_FAILED_OPEN user=${userEmail} reason=${data.reason || "unknown"}`,
+      );
+    }
+
     await pool.query(
       "INSERT INTO audit_log (user_email, action, data) VALUES ($1, $2, $3)",
       [userEmail, action, JSON.stringify(data)]
