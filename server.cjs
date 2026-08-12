@@ -1611,11 +1611,25 @@ const PORT = process.env.PORT || 8080;
 // throw was answering with absolute file paths, line numbers and the module
 // layout. Log the detail server-side (where the Http5xx alert will also see it)
 // and return a body that says nothing about internals.
+// A client error must keep its 4xx status. body-parser raises malformed JSON and
+// an over-limit body as errors carrying status 400 / 413, and collapsing those to
+// 500 would both mislabel them and trip the Http5xx alert rule on ordinary bad
+// input — which is how an alert earns a reputation for crying wolf.
 // eslint-disable-next-line no-unused-vars -- Express needs the 4-arg signature.
 app.use((err, req, res, next) => {
-  console.error(`[Unhandled] ${req.method} ${req.path}:`, err.stack || err.message);
+  const status = err.status || err.statusCode;
+  const clientError = Number.isInteger(status) && status >= 400 && status < 500;
+
+  if (clientError) {
+    console.warn(`[${status}] ${req.method} ${req.path}: ${err.message}`);
+  } else {
+    console.error(`[Unhandled] ${req.method} ${req.path}:`, err.stack || err.message);
+  }
+
   if (res.headersSent) return;
-  res.status(500).json({ error: "Internal server error" });
+  res.status(clientError ? status : 500).json({
+    error: clientError ? "Bad request" : "Internal server error",
+  });
 });
 
 app.listen(PORT, async () => {
