@@ -166,15 +166,33 @@ async function initDB() {
   }
 }
 
-// Parse JSON bodies. IMPORTANT: also parse "text/plain" — the add-in posts audit
-// entries with Content-Type: text/plain so the request stays a CORS "simple"
-// request (Classic Outlook's JS-only send runtime cannot complete a preflight).
-// With the default (application/json only) those bodies were dropped, so audit
-// rows were written with null user/action and empty data.
-// `limit` caps the body at 64 KB. A legitimate audit entry is well under 4 KB;
-// without a cap an unauthenticated caller could push arbitrarily large bodies at
-// /api/audit (the endpoint cannot require auth — see the CORS note below).
-app.use(express.json({ type: ["application/json", "text/plain"], limit: "64kb" }));
+// Parse JSON bodies. The permissive "text/plain" type is scoped to /api/audit
+// ONLY — it must not apply to the admin routes, and the split is a CSRF control:
+//
+// A POST carrying Content-Type: text/plain is a CORS "simple" request, so the
+// browser sends it WITHOUT a preflight and the CORS allowlist never gets to
+// reject it. Admin auth is Easy Auth's session cookie, so while an admin is
+// signed in, a page on any other origin could POST a text/plain body to
+// /api/admin/* and the write would execute — the attacker never needs to read
+// the response. The worst case is POST /api/admin/excluded adding a
+// DOMAIN-scoped exclusion, which silently disables all three checks for a
+// domain of the attacker's choosing. (PUT and DELETE are not "simple" methods,
+// so those do preflight and are already blocked.) Whether the browser actually
+// attaches the cookie depends on Azure's SameSite attribute, which is outside
+// this repo's control — scoping the parser removes the dependency on it.
+//
+// The add-in genuinely needs text/plain for audit: Classic Outlook's JS-only
+// send runtime cannot complete a preflight, and with the default
+// (application/json only) those bodies were dropped, so audit rows were written
+// with null user/action and empty data. The admin panel posts application/json
+// (see saveRow), so it is unaffected by the stricter parser below.
+//
+// `limit` caps the body at 64 KB on both. A legitimate audit entry is well under
+// 4 KB; without a cap an unauthenticated caller could push arbitrarily large
+// bodies at /api/audit (the endpoint cannot require auth — see the CORS note
+// below).
+app.use("/api/audit", express.json({ type: ["application/json", "text/plain"], limit: "64kb" }));
+app.use(express.json({ limit: "64kb" }));
 app.use(express.static(path.join(__dirname, "dist")));
 
 // ── Security headers ─────────────────────────────────────────────────────────
@@ -345,6 +363,19 @@ function adminAuth(req, res, next) {
   if (!p) return res.status(401).json({ error: "Not signed in" });
   if (!isAdminUser(p)) return res.status(403).json({ error: "Forbidden" });
   req.adminUser = p;
+
+  // Reject a write whose body was never parsed. Only /api/audit accepts
+  // text/plain (see the parser note above), so a POST/PUT arriving here with any
+  // other content type leaves req.body undefined. Without this the handlers
+  // destructure undefined and throw, which turns a rejected request into a 500.
+  // The panel always sends application/json, so this only fires on requests that
+  // were not made by the panel — including the cross-site POST the parser split
+  // is there to stop.
+  if ((req.method === "POST" || req.method === "PUT") &&
+      (req.body === null || typeof req.body !== "object")) {
+    return res.status(400).json({ error: "Expected Content-Type: application/json" });
+  }
+
   next();
 }
 
@@ -1574,6 +1605,19 @@ app.use((req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
+// Error handler — must stay last, after every route. Express's default handler
+// serialises the stack trace into the response unless NODE_ENV=production, and
+// NODE_ENV is not set by the deploy workflow or web.config, so any unhandled
+// throw was answering with absolute file paths, line numbers and the module
+// layout. Log the detail server-side (where the Http5xx alert will also see it)
+// and return a body that says nothing about internals.
+// eslint-disable-next-line no-unused-vars -- Express needs the 4-arg signature.
+app.use((err, req, res, next) => {
+  console.error(`[Unhandled] ${req.method} ${req.path}:`, err.stack || err.message);
+  if (res.headersSent) return;
+  res.status(500).json({ error: "Internal server error" });
+});
+
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   await initDB();
