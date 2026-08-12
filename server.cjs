@@ -232,7 +232,10 @@ app.use((req, res, next) => {
 // for abuse-dampening (this is not a quota mechanism).
 const rateBuckets = new Map();
 
-function rateLimit({ windowMs, max, name }) {
+// `onLimit` lets a route degrade instead of rejecting. /api/config uses it to
+// serve a cached copy, because a 429 there is worse than the abuse it prevents
+// (see the note above the limiter definitions).
+function rateLimit({ windowMs, max, name, onLimit }) {
   return (req, res, next) => {
     // Take the LAST X-Forwarded-For entry, not the first. A client can send its
     // own X-Forwarded-For and App Service appends the real peer address to it, so
@@ -252,6 +255,7 @@ function rateLimit({ windowMs, max, name }) {
       return next();
     }
     if (b.count >= max) {
+      if (onLimit && onLimit(req, res)) return;
       res.header("Retry-After", Math.ceil((b.resetAt - now) / 1000));
       return res.status(429).json({ error: "Too many requests" });
     }
@@ -268,11 +272,42 @@ setInterval(() => {
   for (const [key, b] of rateBuckets) if (now >= b.resetAt) rateBuckets.delete(key);
 }, 10 * 60 * 1000).unref();
 
-// Config is fetched once per compose session and cached ~60 min client-side, so
-// a real user needs only a handful per hour. Audit gets more headroom: one email
-// can legitimately write several entries (one per failed check).
-const configLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, name: "config" });
-const auditLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, name: "audit" });
+// ⚠️ These limits MUST stay generous, and the reason is specific to this app.
+//
+// Every user sits behind the same corporate NAT, so all ~200 of them share one
+// public IP: a per-IP limit cannot tell an attacker apart from the whole company.
+// Client-side config caching is 60 minutes, which means the cache expires in
+// waves — Monday morning, everyone opens Outlook at once and the burst arrives
+// from a single address. A measured test confirmed the earlier 60/min ceiling
+// rejected 20 of 80 requests from one IP.
+//
+// A rejected /api/config is not a harmless retry: the add-in FAILS OPEN when it
+// cannot load config, so throttling our own users would silently switch DLP off
+// during the busiest sending hour of the week. That is strictly worse than the
+// flooding this is meant to dampen — these endpoints expose no user data.
+//
+// So the limits are set to catch only obvious abuse, and /api/config degrades to
+// a cached copy instead of rejecting (see serveCachedConfig).
+const configLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 600, name: "config",
+  onLimit: (req, res) => serveCachedConfig(res, "rate-limit"),
+});
+// Audit is more permissive still: one email writes several rows (one per failed
+// check), and a dropped row is a lost compliance record.
+const auditLimiter = rateLimit({ windowMs: 60 * 1000, max: 1200, name: "audit" });
+
+// Server-side memo of the last successful /api/config payload. Two jobs: it lets
+// a burst be answered without hitting Postgres, and it is what the limiter falls
+// back to so the add-in keeps working instead of failing open.
+const CONFIG_MEMO_MS = 30 * 1000;
+let configMemo = null; // { payload, at }
+
+function serveCachedConfig(res, reason) {
+  if (!configMemo) return false;
+  res.header("X-Config-Cache", reason);
+  res.json(configMemo.payload);
+  return true;
+}
 
 // ── Admin auth ───────────────────────────────────────────────────────────────
 // Entra ID only, via App Service Easy Auth: the caller must be signed in AND be a
@@ -1347,6 +1382,13 @@ function toast(msg) {
 // src/services/config.service.ts — keep the two in sync when adding a field.
 app.get("/api/config", configLimiter, async (req, res) => {
   try {
+    // Serve the memo when it is fresh. The payload changes only when an admin
+    // edits something, and clients cache it for an hour anyway, so a 30s memo is
+    // invisible to users while flattening a login-storm burst into one query.
+    if (configMemo && Date.now() - configMemo.at < CONFIG_MEMO_MS) {
+      return serveCachedConfig(res, "fresh");
+    }
+
     const [customers, advisors, exemptions, exclusions, rules, roles, excluded, encwords] = await Promise.all([
       pool.query("SELECT id, name, primary_domain, aliases, domains FROM customers"),
       pool.query("SELECT id, name, email, linked_customers FROM advisors"),
@@ -1358,7 +1400,7 @@ app.get("/api/config", configLimiter, async (req, res) => {
       pool.query("SELECT id, keyword, active FROM encryption_keywords WHERE active = TRUE"),
     ]);
 
-    res.json({
+    const payload = {
       customers: customers.rows,
       advisors: advisors.rows,
       exemptions: exemptions.rows,
@@ -1367,9 +1409,15 @@ app.get("/api/config", configLimiter, async (req, res) => {
       roles: roles.rows,
       excludedRecipients: excluded.rows,
       encryptionKeywords: encwords.rows,
-    });
+    };
+    configMemo = { payload, at: Date.now() };
+    res.json(payload);
   } catch (err) {
     console.error("[Config] DB error:", err.message);
+    // A transient DB blip would otherwise 500 and make every add-in fail open.
+    // Serving the last known-good config keeps enforcement running; it is at most
+    // a few minutes stale, and admins already tolerate a 60-minute client cache.
+    if (serveCachedConfig(res, "db-error")) return;
     res.status(500).json({ error: "Database error" });
   }
 });
