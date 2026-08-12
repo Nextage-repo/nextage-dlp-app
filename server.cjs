@@ -637,7 +637,18 @@ app.get("/api/admin/audit.csv", adminAuth, async (req, res) => {
     `SELECT created_at, user_email, action, data FROM audit_log ${whereSql} ORDER BY created_at DESC LIMIT 50000`,
     params,
   );
-  const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+  // Quoting alone does NOT stop formula injection: Excel still evaluates a field
+  // that begins with = + - @ (or a leading tab/CR) even inside quotes. That matters
+  // here because audit content is writable by UNAUTHENTICATED callers via
+  // /api/audit — so a subject like  =cmd|' /C calc'!A0  would be stored, exported,
+  // and executed on the workstation of whichever admin opened the CSV. Prefixing a
+  // single quote makes Excel treat the value as text; it is visible in the cell but
+  // harmless, and the underlying audit row is untouched.
+  const esc = (v) => {
+    let s = String(v == null ? "" : v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return '"' + s.replace(/"/g, '""') + '"';
+  };
   // `message` gets its own column so Excel users can read the alert without
   // digging through the JSON blob.
   const lines = ["created_at,user_email,action,message,data"];
@@ -995,7 +1006,7 @@ async function loadTable(name) {
       <td>\${(r.aliases||[]).map(a=>\`<span class="tag tag-gray">\${a}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
       <td>\${(r.domains||[]).map(d=>\`<span class="tag">\${d}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
       <td class="actions">
-        <button class="btn btn-primary btn-sm" onclick='editRow("customers",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-primary btn-sm" onclick='editRow("customers",\${attrJson(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("customers",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "advisors") {
@@ -1004,7 +1015,7 @@ async function loadTable(name) {
       <td>\${r.email}</td>
       <td>\${(r.linked_customers||[]).map(c=>\`<span class="tag tag-green">\${c}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
       <td class="actions">
-        <button class="btn btn-primary btn-sm" onclick='editRow("advisors",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-primary btn-sm" onclick='editRow("advisors",\${attrJson(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("advisors",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "exemptions") {
@@ -1012,7 +1023,7 @@ async function loadTable(name) {
       <td>\${r.email}</td>
       <td>\${r.reason||""}</td>
       <td class="actions">
-        <button class="btn btn-primary btn-sm" onclick='editRow("exemptions",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-primary btn-sm" onclick='editRow("exemptions",\${attrJson(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("exemptions",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "exclusions") {
@@ -1020,7 +1031,7 @@ async function loadTable(name) {
       <td><span class="tag tag-gray">.\${r.extension}</span></td>
       <td>\${r.reason||""}</td>
       <td class="actions">
-        <button class="btn btn-primary btn-sm" onclick='editRow("exclusions",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-primary btn-sm" onclick='editRow("exclusions",\${attrJson(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("exclusions",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "rules") {
@@ -1030,7 +1041,7 @@ async function loadTable(name) {
       <td><span class="tag">\${r.rule_type||""}</span></td>
       <td>\${r.active ? '<span class="tag tag-green">פעיל</span>' : '<span class="tag tag-gray">לא פעיל</span>'}</td>
       <td class="actions">
-        <button class="btn btn-primary btn-sm" onclick='editRow("rules",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-primary btn-sm" onclick='editRow("rules",\${attrJson(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("rules",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "roles") {
@@ -1040,7 +1051,7 @@ async function loadTable(name) {
       <td>\${(r.bypass_checks||[]).map(c=>\`<span class="tag tag-gray">\${checkLabel(c)}</span>\`).join("") || '<span style="color:#aaa">—</span>'}</td>
       <td>\${r.active ? '<span class="tag tag-green">פעיל</span>' : '<span class="tag tag-gray">לא פעיל</span>'}</td>
       <td class="actions">
-        <button class="btn btn-primary btn-sm" onclick='editRow("roles",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-primary btn-sm" onclick='editRow("roles",\${attrJson(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("roles",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
   } else if (name === "excluded") {
@@ -1061,7 +1072,7 @@ async function loadTable(name) {
       <td>\${validTag}</td>
       <td>\${r.requested_by||""}</td>
       <td class="actions">
-        <button class="btn btn-primary btn-sm" onclick='editRow("excluded",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-primary btn-sm" onclick='editRow("excluded",\${attrJson(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("excluded",\${r.id})'>🗑️</button>
       </td></tr>\`;
     }).join("");
@@ -1071,7 +1082,7 @@ async function loadTable(name) {
       <td>\${r.note||""}</td>
       <td>\${r.active ? '<span class="tag tag-green">פעיל</span>' : '<span class="tag tag-gray">לא פעיל</span>'}</td>
       <td class="actions">
-        <button class="btn btn-primary btn-sm" onclick='editRow("encwords",\${JSON.stringify(r)})'>✏️ ערוך</button>
+        <button class="btn btn-primary btn-sm" onclick='editRow("encwords",\${attrJson(r)})'>✏️ ערוך</button>
         <button class="btn btn-danger btn-sm" onclick='deleteRow("encwords",\${r.id})'>🗑️</button>
       </td></tr>\`).join("");
   }
@@ -1096,6 +1107,17 @@ function auditQueryString() {
 function esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// Serialises a row for embedding in a single-quoted HTML attribute, e.g.
+//   onclick='editRow("customers", \${attrJson(r)})'
+// JSON.stringify alone is NOT safe here: it leaves apostrophes untouched, so a
+// value like O'Brien closed the attribute early and let the rest of the field be
+// parsed as markup/handler code. esc() covers & < > " and the extra replace
+// covers ' — the browser decodes the entities back before parsing the JS, so the
+// JSON still arrives intact.
+function attrJson(o) {
+  return esc(JSON.stringify(o)).replace(/'/g, "&#39;");
 }
 
 // The מידע column shows the prompt text the user actually saw. Rows written before
