@@ -1,9 +1,23 @@
 // Loads DLP config from Azure Functions proxy. Caches in sessionStorage for 60min.
 
-import { DLPConfig } from "../models/customer.model";
+import { Customer, DLPConfig, ExcludedRecipient } from "../models/customer.model";
 import { CacheService } from "../shared/cache";
-import { API_BASE_URL, API_TIMEOUT_MS, CONFIG_CACHE_TTL_MS } from "../shared/constants";
-import { getJson } from "../shared/http";
+import {
+  API_BASE_URL,
+  API_TIMEOUT_MS,
+  CONFIG_CACHE_TTL_MS,
+  RESOLVE_CACHE_TTL_MS,
+  RESOLVE_NEGATIVE_TTL_MS,
+} from "../shared/constants";
+import { getJson, postJsonReturning } from "../shared/http";
+
+/** What POST /api/resolve answers for one set of recipients. */
+export interface ResolvedContext {
+  matchedCustomers: Customer[];
+  unknownDomains: string[];
+  excludedRecipients: ExcludedRecipient[];
+  userExempt: boolean;
+}
 
 const CACHE_KEY = "dlp:config";
 
@@ -28,6 +42,72 @@ export class ConfigService {
   async refreshConfig(): Promise<DLPConfig> {
     this.cache.delete(CACHE_KEY);
     return this.getConfig();
+  }
+
+  /**
+   * Asks the server what these recipients imply, instead of downloading the whole
+   * customer roster. Returns only matched customers, unknown domains, applicable
+   * exclusions and whether the sender is exempt.
+   *
+   * Content-Type: text/plain keeps this a CORS "simple" request, so it skips the
+   * preflight that Classic Outlook's send runtime cannot complete — the same
+   * reason /api/audit uses it. Do not add other headers.
+   *
+   * Results are cached per recipient set for the session. Negative answers are
+   * cached only briefly: caching "domain unknown" for an hour would mean a
+   * customer added in the knowledge centre appears not to register until the
+   * cache expires, which reads as "the system ignored my change".
+   */
+  async resolve(userEmail: string, recipients: string[]): Promise<ResolvedContext> {
+    const key = `dlp:resolve:${userEmail}|${[...recipients].map((r) => r.toLowerCase()).sort().join(",")}`;
+    const cached = this.cache.get<ResolvedContext>(key);
+    if (cached) {
+      console.log("[Resolve] Cache hit");
+      return cached;
+    }
+
+    const raw = await postJsonReturning<any>(
+      `${API_BASE_URL}/resolve`,
+      { "Content-Type": "text/plain" },
+      { userEmail, recipients },
+      API_TIMEOUT_MS,
+    );
+
+    const resolved: ResolvedContext = {
+      matchedCustomers: Array.isArray(raw.matchedCustomers)
+        ? raw.matchedCustomers.map((c: any) => ({
+            id: String(c.id),
+            partitionKey: "customers" as const,
+            customerName: c.name,
+            aliases: Array.isArray(c.aliases) ? c.aliases : [],
+            primaryDomain: c.primary_domain || (Array.isArray(c.domains) && c.domains[0]) || "",
+            additionalDomains: Array.isArray(c.domains) ? c.domains : [],
+            status: "ACTIVE" as const,
+            updatedAt: new Date().toISOString(),
+          }))
+        : [],
+      unknownDomains: Array.isArray(raw.unknownDomains) ? raw.unknownDomains : [],
+      excludedRecipients: Array.isArray(raw.excludedRecipients)
+        ? raw.excludedRecipients.map((x: any) => ({
+            id: String(x.id ?? ""),
+            email: x.email,
+            scope: x.scope === "DOMAIN" ? ("DOMAIN" as const) : ("EMAIL" as const),
+            // The server does not return reason/requestedBy: they are admin
+            // bookkeeping shown in the panel, not inputs to any check, and leaving
+            // them out keeps free text out of the unauthenticated response.
+            reason: "",
+            expiryDate: x.expiry_date ?? null,
+            requestedBy: "",
+          }))
+        : [],
+      userExempt: raw.userExempt === true,
+    };
+
+    // Nothing matched means the answer may go stale the moment an admin adds a
+    // customer, so hold it for minutes rather than the full session.
+    const ttl = resolved.matchedCustomers.length ? RESOLVE_CACHE_TTL_MS : RESOLVE_NEGATIVE_TTL_MS;
+    this.cache.set(key, resolved, ttl);
+    return resolved;
   }
 
   private async fetchFromApi(): Promise<DLPConfig> {

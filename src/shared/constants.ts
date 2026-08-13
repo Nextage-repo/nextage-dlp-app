@@ -21,6 +21,15 @@ export const API_BASE_URL = "https://nextage-dlp-app-gchqasbzeqgkccf7.westeurope
 // Session cache TTL for config (60 minutes)
 export const CONFIG_CACHE_TTL_MS = 60 * 60 * 1000;
 
+// A resolve answer that matched a customer is stable: it only changes if an admin
+// edits that customer, and the hour-long config cache already accepts that much
+// staleness.
+export const RESOLVE_CACHE_TTL_MS = 60 * 60 * 1000;
+// An answer that matched nothing is held for minutes only. Cache "domain unknown"
+// for an hour and a customer added in the knowledge centre appears not to
+// register — which reads to an admin as "the system ignored my change".
+export const RESOLVE_NEGATIVE_TTL_MS = 3 * 60 * 1000;
+
 // Network timeouts
 export const API_TIMEOUT_MS = 5000;
 

@@ -8,8 +8,28 @@ import { runCheck2 } from "./check2-filename";
 import { runCheck3 } from "./check3-subject";
 import { allExternalRecipientsExcluded } from "./shared";
 
+export interface ValidatorOptions {
+  /**
+   * Unknown domains as determined by POST /api/resolve. Required once the add-in
+   * stops receiving the full customer roster, because it can no longer work this
+   * out locally.
+   */
+  unknownDomains?: string[];
+  /**
+   * Set when /api/resolve could not be reached. Checks 2 and 3 depend on
+   * recipient-scoped data that only the server holds, so they cannot run; check 1
+   * (encryption) uses cached global lists and still runs, and still blocks.
+   * Two WARNING results are added so the user is told which checks were skipped
+   * rather than being left to assume everything passed.
+   */
+  degraded?: boolean;
+}
+
 export class DLPValidator {
-  constructor(private readonly config: DLPConfig) {}
+  constructor(
+    private readonly config: DLPConfig,
+    private readonly options: ValidatorOptions = {},
+  ) {}
 
   async runAllChecks(email: EmailData): Promise<DLPResult> {
     // Empty recipients guard (Outlook returns [] when user hasn't pressed Tab)
@@ -58,6 +78,29 @@ export class DLPValidator {
       encryptionKeywords: this.config.encryptionKeywords,
     });
 
+    if (this.options.degraded) {
+      const unavailable = (check: 2 | 3, what: string): CheckResult => ({
+        check,
+        isValid: false,
+        severity: "WARNING",
+        message: `${what} לא בוצעה — השרת אינו זמין. יש לוודא ידנית לפני השליחה.`,
+        details: { reason: "resolve-unavailable" },
+      });
+
+      const degradedResults = [
+        check1,
+        unavailable(2, "בדיקת שם הקובץ"),
+        unavailable(3, "בדיקת נושא ודומיין"),
+      ];
+      const degradedBlock = degradedResults.some((r) => r.severity === "BLOCK");
+      return {
+        results: degradedResults,
+        hasBlock: degradedBlock,
+        hasWarning: true,
+        shouldBlock: degradedBlock && !SAFE_MODE,
+      };
+    }
+
     const check2 = runCheck2({
       attachments: email.attachments,
       recipients: email.recipients,
@@ -77,6 +120,7 @@ export class DLPValidator {
       exclusions: this.config.exclusions,
       roles: this.config.roles,
       excludedRecipients: this.config.excludedRecipients,
+      unknownDomainsOverride: this.options.unknownDomains,
     });
 
     const results = [check1, check2, check3];

@@ -6,8 +6,13 @@ import { DLPConfig } from "../models/customer.model";
 import { DLPResult, EmailData, RecipientInfo } from "../models/dlp-result.model";
 import { AuditService } from "../services/audit.service";
 import { authService } from "../services/auth.service";
-import { ConfigService } from "../services/config.service";
-import { INTERNAL_DOMAIN, SAFE_MODE } from "../shared/constants";
+import { ConfigService, ResolvedContext } from "../services/config.service";
+import {
+  INTERNAL_DOMAIN,
+  RESOLVE_CACHE_TTL_MS,
+  RESOLVE_NEGATIVE_TTL_MS,
+  SAFE_MODE,
+} from "../shared/constants";
 import { DLPValidator } from "../validators/validators";
 import { readAttachmentsWithHeaders } from "./attachment-reader";
 
@@ -25,6 +30,62 @@ async function getConfigCached(): Promise<DLPConfig> {
   const config = await configService.getConfig();
   cachedConfig = config;
   return config;
+}
+
+// Recipient-scoped answers from POST /api/resolve, memoised in memory for the same
+// reason as cachedConfig: this runtime has no sessionStorage, so ConfigService's own
+// CacheService silently misses on every call here.
+//
+// Keyed by sender + recipient set. An answer that matched a customer is held for the
+// same hour the config cache uses; an answer that matched nothing is held for
+// minutes, so a customer added in the knowledge centre starts being recognised
+// quickly instead of looking as though the change was ignored.
+const resolveMemo = new Map<string, { value: ResolvedContext; expiresAt: number }>();
+
+async function resolveCached(userEmail: string, recipients: string[]): Promise<ResolvedContext> {
+  const key = `${userEmail}|${recipients.map((r) => r.toLowerCase()).sort().join(",")}`;
+  const hit = resolveMemo.get(key);
+  if (hit && hit.expiresAt > Date.now()) {
+    console.log("[OnSend] In-memory resolve cache hit");
+    return hit.value;
+  }
+
+  const token = await authService.getTokenSilent();
+  const value = await new ConfigService(token).resolve(userEmail, recipients);
+  const ttl = value.matchedCustomers.length ? RESOLVE_CACHE_TTL_MS : RESOLVE_NEGATIVE_TTL_MS;
+  resolveMemo.set(key, { value, expiresAt: Date.now() + ttl });
+  return value;
+}
+
+// Single place where resolve is combined with the checks, used by the send handler,
+// the compose InfoBar and the task pane. On failure checks 2-3 are reported as
+// unavailable rather than silently passing; `onResolveFailure` lets the send path
+// additionally record the enforcement failure the Azure alert watches for.
+async function runChecksWithResolve(
+  config: DLPConfig,
+  emailData: EmailData,
+  onResolveFailure?: (err: unknown) => Promise<void>,
+): Promise<DLPResult> {
+  let resolved: ResolvedContext | null = null;
+  try {
+    resolved = await resolveCached(emailData.userEmail, emailData.recipients);
+  } catch (err) {
+    console.warn("[DLP] resolve failed — checks 2-3 unavailable:", err);
+    if (onResolveFailure) await onResolveFailure(err);
+  }
+
+  const validator = resolved
+    ? new DLPValidator(
+        {
+          ...config,
+          customers: resolved.matchedCustomers,
+          excludedRecipients: resolved.excludedRecipients,
+        },
+        { unknownDomains: resolved.unknownDomains },
+      )
+    : new DLPValidator(config, { degraded: true });
+
+  return validator.runAllChecks(emailData);
 }
 
 // Register handlers under BOTH names — older manifests reference `onMessageSend`,
@@ -63,8 +124,10 @@ async function onNewComposeHandler(event: Office.AddinCommands.Event): Promise<v
     const config = await configService.getConfig();
     const emailData = await getEmailData();
 
-    const validator = new DLPValidator(config);
-    const result = await validator.runAllChecks(emailData);
+    // Same resolve step as the send path. Without it, once /api/config stops
+    // shipping the roster this compose-time InfoBar would call every external
+    // recipient an unknown domain.
+    const result = await runChecksWithResolve(config, emailData);
 
     // Add InfoBar notifications on the email — visible at the top.
     await addInfoBarNotifications(result);
@@ -140,9 +203,21 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
     const emailData = await getEmailData();
     partialEmail = emailData;
 
-    // Run DLP checks
-    const validator = new DLPValidator(config);
-    const result = await validator.runAllChecks(emailData);
+    // Recipient-scoped data now comes from the server: /api/config no longer needs
+    // to hand out the whole customer roster. A failure here is not fatal — check 1
+    // (encryption) runs from the cached global lists and still blocks — but checks 2
+    // and 3 cannot run, so the user is warned rather than left to assume they passed.
+    const result = await runChecksWithResolve(config, emailData, async () => {
+      // Record the enforcement failure the Azure alert on
+      // DLP_ENFORCEMENT_FAILED_OPEN watches for. Bounded so it cannot hold the send.
+      await withTimeout(
+        authService
+          .getTokenSilent()
+          .then((t) => new AuditService(t).recordUnavailable("resolve-unavailable", emailData))
+          .catch((e) => console.warn("[OnSend] resolve-unavailable audit failed:", e)),
+        AUDIT_FLUSH_MS,
+      );
+    });
 
     // Audit log — MUST be awaited before event.completed(). In Classic Outlook's
     // JS-only send runtime the process is torn down once event.completed() fires,

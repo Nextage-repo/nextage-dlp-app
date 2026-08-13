@@ -90,6 +90,19 @@ describe("resolve: exclusions and exemptions", () => {
     expect(m.matchExcluded(excluded, ["one.person@partner.com"]).map((x: any) => x.id)).toEqual([2]);
   });
 
+  // The client treats an excluded recipient as known and does not warn about it.
+  // Before this was mirrored server-side, every excluded recipient produced a
+  // spurious "unknown domain" warning.
+  it("does not flag an excluded recipient as an unknown domain", () => {
+    const known = m.buildKnown([], []);
+    expect(m.findUnknownDomains(["anyone@team.co.il"], known, excluded)).toEqual([]);
+    expect(m.findUnknownDomains(["one.person@partner.com"], known, excluded)).toEqual([]);
+    // A different address at an EMAIL-scoped domain is still unknown.
+    expect(m.findUnknownDomains(["other@partner.com"], known, excluded)).toEqual(["partner.com"]);
+    // And with no exclusions supplied at all, nothing changes.
+    expect(m.findUnknownDomains(["anyone@team.co.il"], known, [])).toEqual(["team.co.il"]);
+  });
+
   it("reports an exempt user, case-insensitively", () => {
     const exemptions = [{ id: 1, email: "Boss@nextage.co.il" }];
     expect(m.isUserExempt(exemptions, "boss@nextage.co.il")).toBe(true);

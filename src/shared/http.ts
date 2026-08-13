@@ -32,6 +32,27 @@ export async function postJson(
   });
 }
 
+/**
+ * Like postJson, but returns the parsed response. postJson discards the body,
+ * which is right for fire-and-forget audit writes but not for /api/resolve, whose
+ * answer drives checks 2 and 3.
+ */
+export async function postJsonReturning<T>(
+  url: string,
+  headers: HeadersMap,
+  body: unknown,
+  timeoutMs: number,
+): Promise<T> {
+  const text = await request({
+    method: "POST",
+    url,
+    headers,
+    timeoutMs,
+    body: JSON.stringify(body),
+  });
+  return JSON.parse(text) as T;
+}
+
 function request(options: RequestOptions): Promise<string> {
   if (typeof XMLHttpRequest !== "undefined") {
     return requestWithXhr(options);

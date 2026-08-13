@@ -119,7 +119,27 @@ async function runChecks(): Promise<void> {
       return;
     }
 
-    const validator = new DLPValidator(config);
+    // Recipient-scoped data comes from the server (POST /api/resolve); the customer
+    // roster is no longer shipped to the client. On failure checks 2-3 report as
+    // unavailable instead of silently passing — the task pane runs in a WebView2
+    // with sessionStorage, so ConfigService's own cache applies here.
+    let resolved = null as Awaited<ReturnType<ConfigService["resolve"]>> | null;
+    try {
+      resolved = await configService.resolve(emailData.userEmail, emailData.recipients);
+    } catch (err) {
+      console.warn("[Taskpane] resolve failed — checks 2-3 unavailable:", err);
+    }
+
+    const validator = resolved
+      ? new DLPValidator(
+          {
+            ...config,
+            customers: resolved.matchedCustomers,
+            excludedRecipients: resolved.excludedRecipients,
+          },
+          { unknownDomains: resolved.unknownDomains },
+        )
+      : new DLPValidator(config, { degraded: true });
     const result = await validator.runAllChecks(emailData);
 
     // Audit log (fire-and-forget — the taskpane runs in a persistent WebView2 that

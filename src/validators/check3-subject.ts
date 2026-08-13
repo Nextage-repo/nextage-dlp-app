@@ -17,10 +17,17 @@ export interface Check3Input {
   exclusions: Exclusion[];
   roles?: Role[];
   excludedRecipients?: ExcludedRecipient[];
+  /**
+   * Unknown domains as determined by the server (POST /api/resolve). Supplied when
+   * the add-in no longer holds the full customer roster and therefore cannot work
+   * this out locally. When absent, the local computation below is used — which is
+   * what happens for any client still receiving the whole roster.
+   */
+  unknownDomainsOverride?: string[];
 }
 
 export function runCheck3(input: Check3Input): CheckResult {
-  const { subject, recipients, userEmail, customers, advisors, exemptions, exclusions, roles, excludedRecipients } = input;
+  const { subject, recipients, userEmail, customers, advisors, exemptions, exclusions, roles, excludedRecipients, unknownDomainsOverride } = input;
 
   const permission = getUserPermission(userEmail, exemptions);
   if (permission === "ALL_CHECKS" || permission === "CHECK_3_BYPASS") {
@@ -41,7 +48,12 @@ export function runCheck3(input: Check3Input): CheckResult {
   // longer hard-blocks on its own; if there's an unencrypted attachment, Check 1
   // still blocks the send. So: unknown domain + encrypted/no file -> warning prompt
   // (Send Anyway / Don't Send); unknown domain + unencrypted file -> hard block.
-  const unknownDomains = findUnknownDomains(recipients, customers, advisors, exclusions, excludedRecipients);
+  // Prefer the server's answer: once the roster is no longer shipped to the client,
+  // `customers` holds only recipient-matched entries and a local computation would
+  // call every unmatched recipient unknown.
+  const unknownDomains =
+    unknownDomainsOverride ??
+    findUnknownDomains(recipients, customers, advisors, exclusions, excludedRecipients);
   if (unknownDomains.length > 0) {
     return {
       check: 3,

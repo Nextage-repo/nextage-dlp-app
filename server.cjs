@@ -1586,7 +1586,7 @@ app.post("/api/resolve", resolveLimiter, async (req, res) => {
       // Full records, so the add-in's own matching stays authoritative — this
       // narrows what it looks at rather than deciding for it.
       matchedCustomers: matchCustomers(customers, recipients),
-      unknownDomains: findUnknownDomains(recipients, buildKnown(customers, advisors)),
+      unknownDomains: findUnknownDomains(recipients, buildKnown(customers, advisors), excluded),
       excludedRecipients: matchExcluded(excluded, recipients).map((x) => ({
         email: x.email,
         scope: x.scope,
