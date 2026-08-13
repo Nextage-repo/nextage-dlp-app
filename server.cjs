@@ -192,6 +192,9 @@ async function initDB() {
 // bodies at /api/audit (the endpoint cannot require auth — see the CORS note
 // below).
 app.use("/api/audit", express.json({ type: ["application/json", "text/plain"], limit: "64kb" }));
+// /api/resolve is called from the same send-event runtime as /api/audit, so it
+// needs the same text/plain allowance to stay a CORS simple request.
+app.use("/api/resolve", express.json({ type: ["application/json", "text/plain"], limit: "64kb" }));
 app.use(express.json({ limit: "64kb" }));
 app.use(express.static(path.join(__dirname, "dist")));
 
@@ -320,12 +323,57 @@ const configLimiter = rateLimit({
 // Audit is more permissive still: one email writes several rows (one per failed
 // check), and a dropped row is a lost compliance record.
 const auditLimiter = rateLimit({ windowMs: 60 * 1000, max: 1200, name: "audit" });
+// Resolve is called about once per send, like config, so it gets the same ceiling.
+// Unlike config it has no cached fallback (a stale roster would answer "unknown"
+// for a new customer), so it rejects instead of degrading.
+const resolveLimiter = rateLimit({ windowMs: 60 * 1000, max: 600, name: "resolve" });
 
 // Server-side memo of the last successful /api/config payload. Two jobs: it lets
 // a burst be answered without hitting Postgres, and it is what the limiter falls
 // back to so the add-in keeps working instead of failing open.
 const CONFIG_MEMO_MS = 30 * 1000;
 let configMemo = null; // { payload, at }
+
+// ── Recipient-scoped resolve ─────────────────────────────────────────────────
+// /api/config hands the whole customer roster to anyone who asks. /api/resolve
+// answers a question instead: "for these recipients, which customers match, and
+// which domains are unknown?" The roster never leaves the server, so it cannot be
+// enumerated — a caller must already know a domain to learn its customer name.
+//
+// The matching rules mirror the client's and live in lib/resolve-match.cjs so they
+// can be unit-tested (tests/resolve-match.test.ts). Do not reimplement them here.
+const {
+  matchCustomers,
+  buildKnown,
+  findUnknownDomains,
+  matchExcluded,
+  isUserExempt,
+} = require("./lib/resolve-match.cjs");
+
+const RESOLVE_MEMO_MS = 30 * 1000;
+let resolveMemo = null; // { data, at }
+
+// Memoised for the same reason as configMemo: one send can resolve several
+// recipients, and the roster changes only when an admin edits it.
+async function loadResolveData() {
+  if (resolveMemo && Date.now() - resolveMemo.at < RESOLVE_MEMO_MS) return resolveMemo.data;
+  const [customers, advisors, exemptions, excluded] = await Promise.all([
+    pool.query("SELECT id, name, primary_domain, aliases, domains FROM customers"),
+    pool.query("SELECT id, email FROM advisors"),
+    pool.query("SELECT id, email FROM exemptions"),
+    pool.query(
+      "SELECT id, email, scope, expiry_date FROM excluded_recipients WHERE expiry_date IS NULL OR expiry_date >= CURRENT_DATE",
+    ),
+  ]);
+  const data = {
+    customers: customers.rows,
+    advisors: advisors.rows,
+    exemptions: exemptions.rows,
+    excluded: excluded.rows,
+  };
+  resolveMemo = { data, at: Date.now() };
+  return data;
+}
 
 function serveCachedConfig(res, reason) {
   if (!configMemo) return false;
@@ -1511,6 +1559,51 @@ function strArray(v) {
 }
 
 // Audit endpoint
+// Returns only what the current recipients justify. Unauthenticated for the same
+// reason as /api/audit — the send-event runtime cannot preflight — so it carries
+// the same defences: capped body (see the parser above), rate limit, and strict
+// input validation. It never returns a full list on any path.
+app.post("/api/resolve", resolveLimiter, async (req, res) => {
+  const body = req.body;
+  if (!body || typeof body !== "object") {
+    return res.status(400).json({ error: "Expected a JSON object" });
+  }
+
+  const userEmail = typeof body.userEmail === "string" ? body.userEmail.slice(0, 254) : "";
+  // Cap the recipient count: this is the only unauthenticated input that drives a
+  // roster scan, so an unbounded array would let one request cost 365 × N work.
+  const recipients = Array.isArray(body.recipients)
+    ? body.recipients.filter((r) => typeof r === "string").slice(0, 100).map((r) => r.slice(0, 254))
+    : [];
+  if (!recipients.length) {
+    return res.status(400).json({ error: "recipients must be a non-empty array of strings" });
+  }
+
+  try {
+    const { customers, advisors, exemptions, excluded } = await loadResolveData();
+
+    res.json({
+      // Full records, so the add-in's own matching stays authoritative — this
+      // narrows what it looks at rather than deciding for it.
+      matchedCustomers: matchCustomers(customers, recipients),
+      unknownDomains: findUnknownDomains(recipients, buildKnown(customers, advisors)),
+      excludedRecipients: matchExcluded(excluded, recipients).map((x) => ({
+        email: x.email,
+        scope: x.scope,
+        expiry_date: x.expiry_date,
+      })),
+      userExempt: isUserExempt(exemptions, userEmail),
+    });
+  } catch (err) {
+    console.error("[Resolve] DB error:", err.message);
+    // No cached fallback here on purpose: a stale roster would silently answer
+    // "domain unknown" for a customer added since, so failing is the honest
+    // outcome. The add-in treats a failure as checks 2-3 unavailable and warns
+    // the user, per the agreed policy.
+    res.status(500).json({ error: "Database error" });
+  }
+});
+
 app.post("/api/audit", auditLimiter, async (req, res) => {
   try {
     const b = req.body || {};
