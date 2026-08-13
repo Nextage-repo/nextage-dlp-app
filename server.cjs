@@ -1502,25 +1502,35 @@ app.get("/api/config", configLimiter, async (req, res) => {
       return serveCachedConfig(res, "fresh");
     }
 
-    const [customers, advisors, exemptions, exclusions, rules, roles, excluded, encwords] = await Promise.all([
-      pool.query("SELECT id, name, primary_domain, aliases, domains FROM customers"),
-      pool.query("SELECT id, name, email, linked_customers FROM advisors"),
-      pool.query("SELECT id, email FROM exemptions"),
+    // Recipient-independent lists ONLY. customers, advisors, exemptions and
+    // excludedRecipients used to be here, which meant this unauthenticated endpoint
+    // handed anyone the full client roster of the firm, the addresses that bypass
+    // DLP entirely, and employee names — see POST /api/resolve, which answers those
+    // per recipient instead. Do not add a recipient-scoped list back here.
+    //
+    // What remains is deliberately public: the add-in needs it for check 1 on every
+    // send, and it is discoverable from inside anyway (an employee can rename a file
+    // until the encryption prompt stops appearing).
+    //
+    // Empty arrays are still sent for the removed keys so that a client running the
+    // pre-948f06c bundle gets a well-formed payload rather than a crash. Such a
+    // client will warn on every external domain, which is loud and self-reporting —
+    // restarting Outlook picks up the current bundle.
+    const [exclusions, rules, roles, encwords] = await Promise.all([
       pool.query("SELECT id, extension FROM exclusions"),
       pool.query("SELECT id, expression, rule_type, active FROM rules WHERE active = TRUE"),
       pool.query("SELECT id, role_name, assigned_emails, bypass_checks, active FROM roles WHERE active = TRUE"),
-      pool.query("SELECT id, email, scope, expiry_date FROM excluded_recipients WHERE expiry_date IS NULL OR expiry_date >= CURRENT_DATE"),
       pool.query("SELECT id, keyword, active FROM encryption_keywords WHERE active = TRUE"),
     ]);
 
     const payload = {
-      customers: customers.rows,
-      advisors: advisors.rows,
-      exemptions: exemptions.rows,
+      customers: [],
+      advisors: [],
+      exemptions: [],
       exclusions: exclusions.rows,
       rules: rules.rows,
       roles: roles.rows,
-      excludedRecipients: excluded.rows,
+      excludedRecipients: [],
       encryptionKeywords: encwords.rows,
     };
     configMemo = { payload, at: Date.now() };

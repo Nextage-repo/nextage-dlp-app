@@ -80,6 +80,23 @@ async function runChecksWithResolve(
           ...config,
           customers: resolved.matchedCustomers,
           excludedRecipients: resolved.excludedRecipients,
+          // /api/config no longer ships the exemption list — it named the addresses
+          // that bypass DLP. The server reports only whether THIS sender is exempt,
+          // so rebuild the single row the checks look for. Without this an exempt
+          // user would silently lose their exemption.
+          exemptions: resolved.userExempt
+            ? [
+                {
+                  id: "resolved",
+                  partitionKey: "exemptions" as const,
+                  userEmail: emailData.userEmail,
+                  fullName: "",
+                  exemptionType: "ALL_CHECKS" as const,
+                  scope: "ALL",
+                  expiryDate: null,
+                },
+              ]
+            : [],
         },
         { unknownDomains: resolved.unknownDomains },
       )

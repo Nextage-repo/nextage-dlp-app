@@ -136,6 +136,21 @@ async function runChecks(): Promise<void> {
             ...config,
             customers: resolved.matchedCustomers,
             excludedRecipients: resolved.excludedRecipients,
+            // See commands.ts: the exemption list is no longer public, so rebuild
+            // the one row for this sender from the server's answer.
+            exemptions: resolved.userExempt
+              ? [
+                  {
+                    id: "resolved",
+                    partitionKey: "exemptions" as const,
+                    userEmail: emailData.userEmail,
+                    fullName: "",
+                    exemptionType: "ALL_CHECKS" as const,
+                    scope: "ALL",
+                    expiryDate: null,
+                  },
+                ]
+              : [],
           },
           { unknownDomains: resolved.unknownDomains },
         )
