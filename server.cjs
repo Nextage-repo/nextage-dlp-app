@@ -416,8 +416,28 @@ function isAdminUser(p) {
 
 function adminAuth(req, res, next) {
   const p = getPrincipal(req);
-  if (!p) return res.status(401).json({ error: "Not signed in" });
-  if (!isAdminUser(p)) return res.status(403).json({ error: "Forbidden" });
+  if (!p) {
+    // Worth logging: the page gate and this gate read the same header, so a request
+    // arriving without a principal while /admin loaded fine means Easy Auth did not
+    // attach one to this particular request — not that the user is signed out.
+    console.warn(`[Admin] 401 ${req.method} ${req.path} — no X-MS-CLIENT-PRINCIPAL header`);
+    return res.status(401).json({ error: "Not signed in", reason: "no principal header on this request" });
+  }
+  if (!isAdminUser(p)) {
+    // The group claim is the usual culprit: Entra omits `groups` from the token
+    // once a user is in enough groups, sending an overage indicator instead, and
+    // then membership cannot be checked from the token at all. Report the counts so
+    // this is diagnosable from the response instead of by guesswork.
+    console.warn(
+      `[Admin] 403 ${req.method} ${req.path} — user=${p.email} groupsInToken=${p.groups.length} adminGroupConfigured=${!!ADMIN_GROUP_ID}`,
+    );
+    return res.status(403).json({
+      error: "Forbidden",
+      email: p.email,
+      groupsInToken: p.groups.length,
+      adminGroupConfigured: !!ADMIN_GROUP_ID,
+    });
+  }
   req.adminUser = p;
 
   // Reject a write whose body was never parsed. Only /api/audit accepts
