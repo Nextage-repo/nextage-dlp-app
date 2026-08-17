@@ -481,6 +481,74 @@ app.get("/api/admin/customers", adminAuth, async (req, res) => {
   const r = await pool.query("SELECT * FROM customers ORDER BY id");
   res.json(r.rows);
 });
+// Creating a row goes through PUT, because App Service's authentication layer
+// refuses a POST that carries its session cookie: an empty 403 with
+// X-Ms-Middleware-Request-Id and none of this app's security headers, so the request
+// never reaches this code.
+//
+// Established rather than assumed. The same POST *without* the cookie reaches this
+// app and answers 401 in our own JSON with our headers; POSTs to /api/audit and
+// /api/resolve (no cookie) succeed; and GET and PUT *with* the cookie succeed. So it
+// is neither the path, the body, nor POST in general — it is POST plus the session
+// cookie. Cookie auth is intended for browser navigation rather than API calls, and
+// the platform's CSRF handling guards POST only.
+//
+// The admin gate, the group check and the JSON-body requirement are unchanged; only
+// the verb differs. The path is /api/admin-create/:table and not PUT
+// /api/admin/:table so that it cannot be captured by the existing
+// PUT /api/admin/<table>/:id routes, which would read "excluded" as a row id.
+//
+// The POST routes below are left in place: they are what a fixed platform
+// configuration would let the panel use again, and what any non-browser caller
+// would use.
+const CREATE_SQL = {
+  customers: (b) => [
+    "INSERT INTO customers (name, primary_domain, aliases, domains) VALUES ($1, $2, $3, $4) RETURNING *",
+    [b.name, b.primary_domain, b.aliases, b.domains],
+  ],
+  advisors: (b) => [
+    "INSERT INTO advisors (email, name, linked_customers) VALUES ($1, $2, $3) RETURNING *",
+    [b.email, b.name, b.linked_customers || []],
+  ],
+  exemptions: (b) => [
+    "INSERT INTO exemptions (email, reason) VALUES ($1, $2) RETURNING *",
+    [b.email, b.reason],
+  ],
+  exclusions: (b) => [
+    "INSERT INTO exclusions (extension, reason) VALUES ($1, $2) RETURNING *",
+    [b.extension, b.reason],
+  ],
+  rules: (b) => [
+    "INSERT INTO rules (expression, language, rule_type, active) VALUES ($1, $2, $3, $4) RETURNING *",
+    [b.expression, b.language || "Hebrew", b.rule_type || "Encryption Exemption", b.active !== false],
+  ],
+  roles: (b) => [
+    "INSERT INTO roles (role_name, assigned_emails, bypass_checks, active) VALUES ($1, $2, $3, $4) RETURNING *",
+    [b.role_name, normalizeEmails(b.assigned_emails), normalizeChecks(b.bypass_checks), b.active !== false],
+  ],
+  excluded: (b) => [
+    "INSERT INTO excluded_recipients (email, scope, reason, expiry_date, requested_by) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+    [String(b.email || "").trim(), normalizeScope(b.scope), b.reason || "", normalizeExpiry(b.expiry_date), b.requested_by || ""],
+  ],
+  encwords: (b) => [
+    "INSERT INTO encryption_keywords (keyword, note, active) VALUES ($1, $2, $3) RETURNING *",
+    [String(b.keyword || "").trim(), b.note || "", b.active !== false],
+  ],
+};
+
+app.put("/api/admin-create/:table", adminAuth, async (req, res) => {
+  const build = CREATE_SQL[req.params.table];
+  if (!build) return res.status(404).json({ error: "Unknown table: " + req.params.table });
+  try {
+    const [sql, params] = build(req.body || {});
+    const r = await pool.query(sql, params);
+    res.json(r.rows[0]);
+  } catch (err) {
+    console.error(`[Admin] create ${req.params.table} failed:`, err.message);
+    res.status(500).json({ error: "Insert failed", detail: err.message });
+  }
+});
+
 app.post("/api/admin/customers", adminAuth, async (req, res) => {
   const { name, primary_domain, aliases, domains } = req.body;
   const r = await pool.query(
@@ -1469,8 +1537,13 @@ function getFormData(table) {
 
 async function saveModal() {
   const data = getFormData(currentTable);
-  const url = "/api/admin/" + currentTable + (editingId ? "/" + editingId : "");
-  const method = editingId ? "PUT" : "POST";
+  // Create goes to /api/admin-create/<table> with PUT, not POST to the collection:
+  // App Service's auth layer rejects a cookie-authenticated POST with an empty 403
+  // before it reaches the server. See the note above CREATE_SQL.
+  const url = editingId
+    ? "/api/admin/" + currentTable + "/" + editingId
+    : "/api/admin-create/" + currentTable;
+  const method = "PUT";
   // The result is checked. This used to fire the success toast unconditionally, so a
   // rejected save was indistinguishable from a successful one: the dialog closed,
   // the table reloaded without the row, and the user was told it had been added.
