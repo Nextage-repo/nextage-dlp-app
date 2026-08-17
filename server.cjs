@@ -1684,11 +1684,23 @@ const out=document.getElementById("out");
 async function call(qs){
   out.textContent="רץ...";
   try{
-    const r=await fetch("/api/admin/import-customers"+qs,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
-    const j=await r.json();
-    out.textContent=JSON.stringify(j,null,1);
+    const r=await fetch("/api/admin/import-customers"+qs,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:"{}"});
+    // Read as text first. An empty or non-JSON body — a platform error page, an auth
+    // redirect — used to surface only as "Unexpected end of JSON input", which says
+    // nothing about what actually happened.
+    const raw=await r.text();
+    if(!raw){ out.textContent="HTTP "+r.status+" "+r.statusText+"
+(תשובה ריקה — אין גוף)
+content-type: "+(r.headers.get("content-type")||"-"); return; }
+    let j=null; try{ j=JSON.parse(raw); }catch(_){}
+    if(!j){ out.textContent="HTTP "+r.status+"
+content-type: "+(r.headers.get("content-type")||"-")+"
+
+"+raw.slice(0,1500); return; }
+    out.textContent="HTTP "+r.status+"
+"+JSON.stringify(j,null,1);
     if(j.dryRun) document.getElementById("go").style.display="inline-block";
-  }catch(e){ out.textContent="שגיאה: "+e.message; }
+  }catch(e){ out.textContent="נכשל לפני קבלת תשובה: "+e.message; }
 }
 document.getElementById("dry").onclick=()=>call("");
 document.getElementById("go").onclick=()=>{
