@@ -1451,7 +1451,24 @@ async function saveModal() {
   const data = getFormData(currentTable);
   const url = "/api/admin/" + currentTable + (editingId ? "/" + editingId : "");
   const method = editingId ? "PUT" : "POST";
-  await fetch(url, { method, headers: { "Content-Type":"application/json" }, body: JSON.stringify(data) });
+  // The result is checked. This used to fire the success toast unconditionally, so a
+  // rejected save was indistinguishable from a successful one: the dialog closed,
+  // the table reloaded without the row, and the user was told it had been added.
+  // On failure the dialog stays open so the typed values are not lost.
+  let res;
+  try {
+    res = await fetch(url, { method, headers: { "Content-Type":"application/json" }, body: JSON.stringify(data) });
+  } catch (err) {
+    toast("השמירה נכשלה (לא הגיעה לשרת): " + err.message);
+    return;
+  }
+  if (!res.ok) {
+    let detail = "";
+    try { detail = (await res.text()).slice(0, 300); } catch (e) { detail = "(אין גוף תשובה)"; }
+    console.error("[Admin] save failed", res.status, detail);
+    toast("השמירה נכשלה — HTTP " + res.status + " · " + detail);
+    return;
+  }
   closeModal();
   loadTable(currentTable);
   toast(editingId ? "עודכן בהצלחה ✅" : "נוסף בהצלחה ✅");
@@ -1459,7 +1476,20 @@ async function saveModal() {
 
 async function deleteRow(table, id) {
   if (!confirm("האם למחוק?")) return;
-  await fetch("/api/admin/" + table + "/" + id, { method: "DELETE" });
+  let res;
+  try {
+    res = await fetch("/api/admin/" + table + "/" + id, { method: "DELETE" });
+  } catch (err) {
+    toast("המחיקה נכשלה (לא הגיעה לשרת): " + err.message);
+    return;
+  }
+  if (!res.ok) {
+    let detail = "";
+    try { detail = (await res.text()).slice(0, 300); } catch (e) { detail = "(אין גוף תשובה)"; }
+    console.error("[Admin] delete failed", res.status, detail);
+    toast("המחיקה נכשלה — HTTP " + res.status + " · " + detail);
+    return;
+  }
   loadTable(table);
   toast("נמחק ✅");
 }
