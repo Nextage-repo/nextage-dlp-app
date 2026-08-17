@@ -65,12 +65,21 @@ describe("planImport", () => {
     expect(plan.conflicted).toContain("shared.com");
   });
 
-  // Absent rows are reported for a human to read, never queued for deletion:
-  // the file only carries the batch the controllers have finished reviewing.
-  it("lists database rows missing from the file without deleting them", () => {
+  // Absent rows are reported with their ids so a caller can act on them, but this
+  // module never produces a delete list of its own.
+  it("lists database rows missing from the file, with ids, without deleting them", () => {
     const existing = [row(1, "Kept", "a.com", ["a.com"]), row(2, "Pending Review", "b.com", ["b.com"])];
     const plan = planImport(existing, [row(0, "Kept", "a.com", ["a.com"])]);
-    expect(plan.absent).toEqual(["Pending Review"]);
+    expect(plan.absent).toEqual([{ id: 2, name: "Pending Review" }]);
     expect(plan).not.toHaveProperty("deletes");
+  });
+
+  // A rename must never look like a removal, or applying deletions would drop the
+  // customer and re-add it — losing its id and any history attached to it.
+  it("does not report a renamed customer as absent", () => {
+    const existing = [row(9, "Old Name", "same.com", ["same.com"])];
+    const plan = planImport(existing, [row(0, "New Name", "same.com", ["same.com"])]);
+    expect(plan.absent).toEqual([]);
+    expect(plan.renames).toHaveLength(1);
   });
 });

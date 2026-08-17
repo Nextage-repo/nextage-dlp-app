@@ -343,6 +343,7 @@ let configMemo = null; // { payload, at }
 //
 // The matching rules mirror the client's and live in lib/resolve-match.cjs so they
 // can be unit-tested (tests/resolve-match.test.ts). Do not reimplement them here.
+const { planImport } = require("./lib/customer-import.cjs");
 const {
   matchCustomers,
   buildKnown,
@@ -481,6 +482,173 @@ app.get("/api/admin/customers", adminAuth, async (req, res) => {
   const r = await pool.query("SELECT * FROM customers ORDER BY id");
   res.json(r.rows);
 });
+// The page for the import above. The file is read in the browser and its contents
+// are PUT straight to the API, so the roster never lands on disk here and never goes
+// near the repository.
+app.get("/admin/import", adminPage, (req, res) => {
+  res.header("Content-Type", "text/html; charset=utf-8");
+  const NL = String.fromCharCode(10);
+  res.send([
+    '<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">',
+    "<title>ייבוא לקוחות</title><style>",
+    "body{font-family:Segoe UI,sans-serif;margin:24px;background:#f7f8fa;color:#111;max-width:1000px}",
+    "h1{font-size:20px;color:#080056;margin-bottom:4px} .sub{color:#555;font-size:13px;margin-bottom:18px}",
+    "button{font:inherit;padding:10px 18px;border:0;border-radius:6px;cursor:pointer;margin-inline-end:8px}",
+    "#dry{background:#323A9F;color:#fff} #go{background:#1E7A3C;color:#fff;display:none}",
+    "button:disabled{opacity:.5;cursor:default}",
+    "pre{background:#fff;border:1px solid #dde;border-radius:6px;padding:12px;max-height:52vh;overflow:auto;white-space:pre-wrap;font-size:12px}",
+    ".danger{border:1px solid #DA4A54;background:#fff5f5;border-radius:6px;padding:10px 12px;margin:14px 0;font-size:13px}",
+    "label{cursor:pointer} input[type=file]{margin:8px 0 14px;display:block}",
+    "</style></head><body>",
+    "<h1>ייבוא רשימת לקוחות</h1>",
+    '<div class="sub">בחר את קובץ ה-JSON שנוצר על ידי scripts/xlsx-to-customers.py. הקובץ נקרא בדפדפן ונשלח לשרת — הוא אינו נשמר על השרת.</div>',
+    '<input type="file" id="file" accept=".json,application/json">',
+    '<div class="danger"><label><input type="checkbox" id="del"> ',
+    "<b>למחוק לקוחות שאינם בקובץ</b></label><br>",
+    "מחיקת לקוח מבטלת עבורו את בדיקת שם הקובץ, והדומיין שלו יסומן כ«לא מוכר» בבדיקה 3. ",
+    "הרשימה המדויקת תוצג בבדיקה לפני שתאשר.</div>",
+    '<button id="dry">בדיקה (ללא כתיבה)</button><button id="go">בצע ייבוא</button>',
+    '<pre id="out">בחר קובץ והתחל בבדיקה.</pre>',
+    "<script>",
+    'var out=document.getElementById("out"),rows=null;',
+    'var NL=String.fromCharCode(10);',
+    'document.getElementById("file").onchange=function(e){',
+    '  var f=e.target.files[0]; if(!f) return;',
+    '  var r=new FileReader();',
+    '  r.onload=function(){',
+    '    try{ rows=JSON.parse(r.result); }catch(err){ rows=null; out.textContent="הקובץ אינו JSON תקין: "+err.message; return; }',
+    '    if(!Array.isArray(rows)||!rows.length){ rows=null; out.textContent="הקובץ אינו מכיל מערך לקוחות."; return; }',
+    '    out.textContent="נטענו "+rows.length+" לקוחות מהקובץ. לחץ «בדיקה».";',
+    '    document.getElementById("go").style.display="none";',
+    "  };",
+    "  r.readAsText(f);",
+    "};",
+    "async function call(qs){",
+    '  if(!rows){ out.textContent="בחר קובץ קודם."; return; }',
+    '  out.textContent="רץ...";',
+    '  var btns=document.querySelectorAll("button"); btns.forEach(function(b){b.disabled=true;});',
+    "  try{",
+    '    var r=await fetch("/api/admin-import/customers"+qs,{method:"PUT",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(rows)});',
+    "    var raw=await r.text(); var j=null; try{ j=JSON.parse(raw); }catch(_){ }",
+    '    if(!j){ out.textContent="HTTP "+r.status+NL+"content-type: "+(r.headers.get("content-type")||"-")+NL+NL+raw.slice(0,1200); return; }',
+    '    out.textContent="HTTP "+r.status+NL+JSON.stringify(j,null,1);',
+    '    if(j.dryRun) document.getElementById("go").style.display="inline-block";',
+    '  }catch(e){ out.textContent="הבקשה נכשלה לפני קבלת תשובה: "+e.message; }',
+    "  finally{ btns.forEach(function(b){b.disabled=false;}); }",
+    "}",
+    'document.getElementById("dry").onclick=function(){ call(""); };',
+    'document.getElementById("go").onclick=function(){',
+    '  var del=document.getElementById("del").checked;',
+    '  var msg=del?"לכתוב לבסיס הנתונים ולמחוק את הלקוחות שאינם בקובץ?":"לכתוב לבסיס הנתונים? (ללא מחיקות)";',
+    '  if(confirm(msg)) call("?apply=1&renames=1"+(del?"&deletes=1":""));',
+    "};",
+    "</script></body></html>",
+  ].join(NL));
+});
+
+// ── Bulk customer import ─────────────────────────────────────────────────────
+// The reviewed workbook becomes JSON with scripts/xlsx-to-customers.py, and that
+// JSON is sent here from the browser. Deliberately not stored on the server and not
+// committed anywhere: the roster is the data this app spent a release closing off.
+//
+// PUT, for the reason described above CREATE_SQL — a cookie-authenticated POST is
+// refused by the platform. There is no GET variant on purpose: an earlier temporary
+// version had one, and because Express 5 makes req.query a getter, the attempt to
+// blank it silently failed and a plain link could trigger a write.
+//
+// Its own parser: the payload is a few hundred KB, well past the 64kb cap that the
+// rest of the API is held to.
+const importParser = express.json({ limit: "5mb" });
+
+app.put("/api/admin-import/customers", adminAuth, importParser, async (req, res) => {
+  const apply = req.query.apply === "1";
+  const withRenames = req.query.renames === "1";
+  const withDeletes = req.query.deletes === "1";
+
+  const incoming = Array.isArray(req.body) ? req.body : req.body && req.body.customers;
+  if (!Array.isArray(incoming) || !incoming.length) {
+    return res.status(400).json({ error: "Expected a non-empty array of customers" });
+  }
+  const malformed = incoming.filter((c) => !c || typeof c.name !== "string" || !c.name.trim());
+  if (malformed.length) {
+    return res.status(400).json({ error: `${malformed.length} row(s) have no name` });
+  }
+
+  try {
+    const existing = (
+      await pool.query("SELECT id, name, primary_domain, aliases, domains FROM customers")
+    ).rows;
+    const plan = planImport(existing, incoming);
+
+    const summary = {
+      dryRun: !apply,
+      file: incoming.length,
+      database: existing.length,
+      willAdd: plan.inserts.length,
+      willUpdate: plan.updates.length,
+      willDelete: withDeletes ? plan.absent.length : 0,
+      renames: plan.renames.map((r) => `${r.from} -> ${r.to}`),
+      skippedAmbiguous: plan.ambiguous.map((a) => `${a.incoming.name} matches ${a.matches.join(" | ")}`),
+      sharedDomainsInDatabase: plan.conflicted,
+      // Always reported, whether or not deletion was asked for, so the list can be
+      // read before anyone commits to removing it.
+      inDatabaseNotInFile: plan.absent.map((a) => a.name),
+    };
+
+    if (!apply) {
+      return res.json({ ...summary, note: "Nothing written. Send ?apply=1 to write." });
+    }
+    if (plan.renames.length && !withRenames) {
+      return res.status(409).json({ ...summary, error: "Renames present — confirm them, then add &renames=1" });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const c of plan.inserts) {
+        await client.query(
+          "INSERT INTO customers (name, primary_domain, aliases, domains) VALUES ($1, $2, $3, $4)",
+          [c.name, c.primary_domain, c.aliases, c.domains],
+        );
+      }
+      for (const u of plan.updates) {
+        await client.query(
+          "UPDATE customers SET name = $1, primary_domain = $2, aliases = $3, domains = $4 WHERE id = $5",
+          [u.after.name, u.after.primary_domain, u.after.aliases, u.after.domains, u.id],
+        );
+      }
+      if (withDeletes && plan.absent.length) {
+        // By id, from the plan computed in this same request — never by name, and
+        // never a "delete everything not in the file" statement, so a mismatch
+        // between what was reported and what is removed is not possible.
+        await client.query("DELETE FROM customers WHERE id = ANY($1::int[])", [plan.absent.map((a) => a.id)]);
+      }
+      await client.query("COMMIT");
+      configMemo = null;
+      resolveMemo = null;
+      console.log(
+        `[Import] applied by ${req.adminUser.email}: +${plan.inserts.length} ~${plan.updates.length} -${withDeletes ? plan.absent.length : 0}`,
+      );
+      res.json({
+        ...summary,
+        applied: true,
+        added: plan.inserts.length,
+        updated: plan.updates.length,
+        deleted: withDeletes ? plan.absent.length : 0,
+      });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("[Import] rolled back:", err.message);
+      res.status(500).json({ error: "Rolled back — nothing changed", detail: err.message });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error("[Import] failed:", err.message);
+    res.status(500).json({ error: "Import failed", detail: err.message });
+  }
+});
+
 // Creating a row goes through PUT, because App Service's authentication layer
 // refuses a POST that carries its session cookie: an empty 403 with
 // X-Ms-Middleware-Request-Id and none of this app's security headers, so the request
