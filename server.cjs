@@ -1681,6 +1681,11 @@ pre{background:#fff;border:1px solid #dde;border-radius:6px;padding:12px;max-hei
 <pre id="out">—</pre>
 <script>
 const out=document.getElementById("out");
+// Built rather than written as an escape: this page is inside a template literal in
+// server.cjs, so a backslash-n there is consumed by Node and arrives as a real line
+// break, which splits the string literal and stops the whole script parsing — which
+// is exactly what silently killed these buttons once already.
+const NL=String.fromCharCode(10);
 async function call(qs){
   out.textContent="רץ...";
   try{
@@ -1689,16 +1694,10 @@ async function call(qs){
     // redirect — used to surface only as "Unexpected end of JSON input", which says
     // nothing about what actually happened.
     const raw=await r.text();
-    if(!raw){ out.textContent="HTTP "+r.status+" "+r.statusText+"
-(תשובה ריקה — אין גוף)
-content-type: "+(r.headers.get("content-type")||"-"); return; }
+    if(!raw){ out.textContent="HTTP "+r.status+" "+r.statusText+NL+"(תשובה ריקה — אין גוף)"+NL+"content-type: "+(r.headers.get("content-type")||"-"); return; }
     let j=null; try{ j=JSON.parse(raw); }catch(_){}
-    if(!j){ out.textContent="HTTP "+r.status+"
-content-type: "+(r.headers.get("content-type")||"-")+"
-
-"+raw.slice(0,1500); return; }
-    out.textContent="HTTP "+r.status+"
-"+JSON.stringify(j,null,1);
+    if(!j){ out.textContent="HTTP "+r.status+NL+"content-type: "+(r.headers.get("content-type")||"-")+NL+NL+raw.slice(0,1500); return; }
+    out.textContent="HTTP "+r.status+NL+JSON.stringify(j,null,1);
     if(j.dryRun) document.getElementById("go").style.display="inline-block";
   }catch(e){ out.textContent="נכשל לפני קבלת תשובה: "+e.message; }
 }
