@@ -1584,7 +1584,17 @@ function strArray(v) {
 // customer editor already is. It takes no request body: the data comes from a file
 // deployed with the app, so there is nothing to inject. Dry run unless ?apply=1.
 // It never deletes — see lib/customer-import.cjs.
-app.post("/api/admin/import-customers", adminAuth, async (req, res) => {
+// GET is the dry run and can never write, whatever the query string says. It exists
+// so the report can be read by opening a URL — pasting a fetch() into the DevTools
+// console meant fighting Chrome's paste protection for no benefit.
+app.get("/api/admin/import-customers", adminAuth, (req, res) => {
+  req.query = {};
+  return importCustomers(req, res);
+});
+
+app.post("/api/admin/import-customers", adminAuth, (req, res) => importCustomers(req, res));
+
+async function importCustomers(req, res) {
   const apply = req.query.apply === "1";
   const withRenames = req.query.renames === "1";
 
@@ -1650,6 +1660,41 @@ app.post("/api/admin/import-customers", adminAuth, async (req, res) => {
     console.error("[Import] failed:", err.message);
     res.status(500).json({ error: "Import failed", detail: err.message });
   }
+}
+
+// A page with a button, so running the import needs no console and no pasting.
+// Same admin gate; the Apply button POSTs, which is what the CSRF guard expects.
+app.get("/admin/import", adminAuth, (req, res) => {
+  res.header("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
+<title>ייבוא לקוחות</title><style>
+body{font-family:Segoe UI,sans-serif;margin:24px;background:#f7f8fa;color:#111}
+h1{font-size:20px;color:#080056} button{font:inherit;padding:10px 18px;border:0;border-radius:6px;cursor:pointer}
+#dry{background:#323A9F;color:#fff} #go{background:#DA4A54;color:#fff;display:none}
+pre{background:#fff;border:1px solid #dde;border-radius:6px;padding:12px;max-height:60vh;overflow:auto;white-space:pre-wrap;font-size:12px}
+.note{color:#555;font-size:13px;margin:8px 0 16px}
+</style></head><body>
+<h1>ייבוא רשימת לקוחות</h1>
+<p class="note">«בדיקה» אינה כותבת דבר. «בצע ייבוא» מוסיף ומעדכן בתוך טרנזקציה אחת, ואינו מוחק אף לקוח.</p>
+<button id="dry">בדיקה (ללא כתיבה)</button>
+<button id="go">בצע ייבוא</button>
+<pre id="out">—</pre>
+<script>
+const out=document.getElementById("out");
+async function call(qs){
+  out.textContent="רץ...";
+  try{
+    const r=await fetch("/api/admin/import-customers"+qs,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    const j=await r.json();
+    out.textContent=JSON.stringify(j,null,1);
+    if(j.dryRun) document.getElementById("go").style.display="inline-block";
+  }catch(e){ out.textContent="שגיאה: "+e.message; }
+}
+document.getElementById("dry").onclick=()=>call("");
+document.getElementById("go").onclick=()=>{
+  if(confirm("לכתוב לבסיס הנתונים? הפעולה מוסיפה ומעדכנת, ואינה מוחקת.")) call("?apply=1&renames=1");
+};
+</script></body></html>`);
 });
 
 // Returns only what the current recipients justify. Unauthenticated for the same
