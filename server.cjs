@@ -1,4 +1,5 @@
 const express = require("express");
+const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
 
@@ -342,6 +343,7 @@ let configMemo = null; // { payload, at }
 //
 // The matching rules mirror the client's and live in lib/resolve-match.cjs so they
 // can be unit-tested (tests/resolve-match.test.ts). Do not reimplement them here.
+const { planImport } = require("./lib/customer-import.cjs");
 const {
   matchCustomers,
   buildKnown,
@@ -1569,6 +1571,87 @@ function strArray(v) {
 }
 
 // Audit endpoint
+// TEMPORARY — remove once the v14 customer list has been imported.
+//
+// The import belongs in scripts/import-customers.cjs, but that has to run where the
+// database credentials are, and the App Service SSH console turned out not to have
+// working ones: same host, user and password variables as this process uses, same
+// SSL settings, yet Postgres rejects the password there. Rather than keep debugging
+// Azure's configuration plumbing, this runs the identical plan through the
+// connection that demonstrably works — this one.
+//
+// Same admin gate as the rest of the panel, so it is exactly as reachable as the
+// customer editor already is. It takes no request body: the data comes from a file
+// deployed with the app, so there is nothing to inject. Dry run unless ?apply=1.
+// It never deletes — see lib/customer-import.cjs.
+app.post("/api/admin/import-customers", adminAuth, async (req, res) => {
+  const apply = req.query.apply === "1";
+  const withRenames = req.query.renames === "1";
+
+  try {
+    const incoming = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "customers-done.json"), "utf8"),
+    );
+    const existing = (
+      await pool.query("SELECT id, name, primary_domain, aliases, domains FROM customers")
+    ).rows;
+    const plan = planImport(existing, incoming);
+
+    const summary = {
+      dryRun: !apply,
+      file: incoming.length,
+      database: existing.length,
+      willAdd: plan.inserts.length,
+      willUpdate: plan.updates.length,
+      renames: plan.renames.map((r) => `${r.from} -> ${r.to}`),
+      skippedAmbiguous: plan.ambiguous.map((a) => `${a.incoming.name} matches ${a.matches.join(" | ")}`),
+      sharedDomainsInDatabase: plan.conflicted,
+      inDatabaseNotInFile: plan.absent,
+      neverDeletes: true,
+    };
+
+    if (!apply) {
+      return res.json({ ...summary, note: "Nothing written. Add ?apply=1 to write." });
+    }
+    if (plan.renames.length && !withRenames) {
+      return res.status(409).json({
+        ...summary,
+        error: "Renames present. Confirm each one, then add &renames=1 to proceed.",
+      });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const c of plan.inserts) {
+        await client.query(
+          "INSERT INTO customers (name, primary_domain, aliases, domains) VALUES ($1, $2, $3, $4)",
+          [c.name, c.primary_domain, c.aliases, c.domains],
+        );
+      }
+      for (const u of plan.updates) {
+        await client.query(
+          "UPDATE customers SET name = $1, primary_domain = $2, aliases = $3, domains = $4 WHERE id = $5",
+          [u.after.name, u.after.primary_domain, u.after.aliases, u.after.domains, u.id],
+        );
+      }
+      await client.query("COMMIT");
+      configMemo = null;
+      resolveMemo = null;
+      res.json({ ...summary, applied: true, added: plan.inserts.length, updated: plan.updates.length });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("[Import] rolled back:", err.message);
+      res.status(500).json({ error: "Rolled back — nothing changed", detail: err.message });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error("[Import] failed:", err.message);
+    res.status(500).json({ error: "Import failed", detail: err.message });
+  }
+});
+
 // Returns only what the current recipients justify. Unauthenticated for the same
 // reason as /api/audit — the send-event runtime cannot preflight — so it carries
 // the same defences: capped body (see the parser above), rate limit, and strict
