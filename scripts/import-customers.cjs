@@ -38,7 +38,28 @@ if (!file) {
   process.exit(1);
 }
 
+if (!fs.existsSync(file)) {
+  console.error(`cannot find ${file}\n(paths are relative to the current directory — pass the full path if in doubt)`);
+  process.exit(1);
+}
 const incoming = JSON.parse(fs.readFileSync(file, "utf8"));
+
+// Fail with an explanation rather than a raw connection error. This script has to
+// run somewhere that already has the database environment — in practice the App
+// Service's own console, where the app's settings are present. A developer laptop
+// has neither the variables nor, usually, a path through the database firewall.
+const missing = ["AZURE_POSTGRESQL_HOST", "AZURE_POSTGRESQL_USER", "AZURE_POSTGRESQL_PASSWORD", "AZURE_POSTGRESQL_DATABASE"]
+  .filter((k) => !process.env[k]);
+if (missing.length) {
+  console.error(
+    `missing database environment: ${missing.join(", ")}\n\n` +
+      "Run this in the App Service console, where those are already set:\n" +
+      "  https://nextage-dlp-app.scm.azurewebsites.net/DebugConsole\n" +
+      "  cd site\\wwwroot\n" +
+      "  node scripts\\import-customers.cjs customers-done.json",
+  );
+  process.exit(1);
+}
 const lower = (s) => String(s == null ? "" : s).trim().toLowerCase();
 const keysOf = (c) =>
   [...new Set([lower(c.primary_domain), ...(c.domains || []).map(lower)])].filter(Boolean);
