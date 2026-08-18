@@ -110,3 +110,30 @@ describe("resolve: exclusions and exemptions", () => {
     expect(m.isUserExempt(exemptions, "")).toBe(false);
   });
 });
+
+// Each of these domains hosts one mailbox per customer. An address at a domain that
+// is NOT in SHARED_INBOX_DOMAINS gets compared against the recipient's domain and can
+// therefore never match, so mail to it stops being tied to its customer — which is
+// what had happened to 25 dokka.me and 14 escalon.services entries.
+describe("resolve: every shared-inbox domain is recognised", () => {
+  const two = [
+    { id: 1, name: "Sanoculis", primary_domain: "sanoculis.com", domains: ["sanoculis.com", "sanoculis@escalon.services"], aliases: [] },
+    { id: 2, name: "Oligo Cyber", primary_domain: "oligosecurity.io", domains: ["oligosecurity.io", "oligosecurity@escalon.services"], aliases: [] },
+    { id: 3, name: "Vivid Security", primary_domain: "vivid.security", domains: ["vivid.security", "vivid-sec-inc52@dokka.me"], aliases: [] },
+  ];
+
+  it("ties an escalon.services mailbox to its own customer only", () => {
+    expect(m.matchCustomers(two, ["sanoculis@escalon.services"]).map((c: any) => c.name)).toEqual(["Sanoculis"]);
+    expect(m.matchCustomers(two, ["oligosecurity@escalon.services"]).map((c: any) => c.name)).toEqual(["Oligo Cyber"]);
+  });
+
+  it("ties a dokka.me mailbox to its own customer", () => {
+    expect(m.matchCustomers(two, ["vivid-sec-inc52@dokka.me"]).map((c: any) => c.name)).toEqual(["Vivid Security"]);
+  });
+
+  it("leaves the shared domains themselves unknown", () => {
+    const known = m.buildKnown(two, []);
+    expect(m.findUnknownDomains(["nobody@escalon.services"], known, [])).toEqual(["escalon.services"]);
+    expect(m.findUnknownDomains(["nobody@dokka.me"], known, [])).toEqual(["dokka.me"]);
+  });
+});

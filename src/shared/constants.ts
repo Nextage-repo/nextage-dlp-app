@@ -9,12 +9,19 @@ export const SAFE_MODE = false;
 // Internal organization domain — emails to this domain skip encryption checks
 export const INTERNAL_DOMAIN = "nextage.co.il";
 
-// Shared document-portal domains. Every customer has a DIFFERENT inbox at the
-// same domain (e.g. aizome32@dokka.co.il vs whalo-games12@dokka.co.il), so an
-// entry at one of these domains in a customer's "דומיינים נוספים" is matched by
-// FULL ADDRESS. Everything else — including every primary domain — keeps plain
-// domain matching.
-export const SHARED_INBOX_DOMAINS = ["dokka.co.il"];
+// Shared document-portal and outsourced-service domains. Every customer has a
+// DIFFERENT inbox at the same domain (e.g. aizome32@dokka.co.il vs
+// whalo-games12@dokka.co.il), so an entry at one of these domains in a customer's
+// "דומיינים נוספים" is matched by FULL ADDRESS, and the domain itself stays unknown.
+// Everything else — including every primary domain — keeps plain domain matching.
+//
+// Keeping this list complete matters in both directions. Matching one of these by
+// domain would tie every customer sharing the service to each other. But an address
+// at a domain NOT listed here is compared against the recipient's domain, which can
+// never match — so it silently stops associating that mail with its customer.
+// dokka.me (25 entries) and escalon.services (14) were in exactly that state in the
+// controllers' workbook until they were added here.
+export const SHARED_INBOX_DOMAINS = ["dokka.co.il", "dokka.me", "escalon.services"];
 
 export const API_BASE_URL = "https://nextage-dlp-app-gchqasbzeqgkccf7.westeurope-01.azurewebsites.net/api";
 
