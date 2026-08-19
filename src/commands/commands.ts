@@ -8,11 +8,11 @@ import { AuditService } from "../services/audit.service";
 import { authService } from "../services/auth.service";
 import { ConfigService, ResolvedContext } from "../services/config.service";
 import {
-  INTERNAL_DOMAIN,
   RESOLVE_CACHE_TTL_MS,
   RESOLVE_NEGATIVE_TTL_MS,
   SAFE_MODE,
 } from "../shared/constants";
+import { isInternalOnly, splitRecipients } from "../shared/recipients";
 import { DLPValidator } from "../validators/validators";
 import { readAttachmentsWithHeaders } from "./attachment-reader";
 
@@ -202,12 +202,9 @@ async function onMessageSendHandler(event: Office.AddinCommands.Event): Promise<
   try {
     // Fast-path: if every recipient is internal, skip all DLP checks and allow immediately.
     // Internal emails do not require encryption, filename, or subject checks.
-    const fastRecipients = await getRecipientsRaw();
-    const allInternal =
-      fastRecipients.length > 0 &&
-      fastRecipients.every((r) => r.toLowerCase().endsWith(`@${INTERNAL_DOMAIN}`));
-
-    if (allInternal) {
+    // An internal distribution group counts as internal even though it has no SMTP
+    // address of its own — see shared/recipients.ts.
+    if (isInternalOnly(splitRecipients(await getAllRecipientEntries()))) {
       console.log("[OnSend] All recipients internal — allowing send");
       event.completed({ allowEvent: true });
       return;
@@ -369,10 +366,7 @@ async function getEmailData(): Promise<EmailData> {
     readAttachmentsWithHeaders(item),
   ]);
 
-  const allRecipients = [...to, ...cc, ...bcc]
-    .map((r) => r.emailAddress.toLowerCase().trim())
-    .filter((e) => e.length > 0 && e.includes("@"));
-  const uniqueRecipients = Array.from(new Set(allRecipients));
+  const split = splitRecipients([...to, ...cc, ...bcc]);
 
   return {
     subject,
@@ -380,7 +374,8 @@ async function getEmailData(): Promise<EmailData> {
     to,
     cc,
     bcc,
-    recipients: uniqueRecipients,
+    recipients: split.addresses,
+    groupRecipients: split.groups,
     attachments,
   };
 }
@@ -398,19 +393,15 @@ function getSubject(item: Office.MessageCompose): Promise<string> {
   });
 }
 
-// Returns all recipient email addresses (to+cc+bcc) as plain strings.
-// Used for the internal fast-path check before any config fetch.
-function getRecipientsRaw(): Promise<string[]> {
+// Returns every recipient entry (to+cc+bcc) as Outlook reported it, addresses and
+// groups alike. Used for the internal fast-path check before any config fetch.
+function getAllRecipientEntries(): Promise<RecipientInfo[]> {
   const item = Office.context.mailbox.item as Office.MessageCompose;
   return Promise.all([
     getRecipients(item.to),
     getRecipients(item.cc),
     getRecipients(item.bcc),
-  ]).then(([to, cc, bcc]) =>
-    [...to, ...cc, ...bcc]
-      .map((r) => r.emailAddress.toLowerCase().trim())
-      .filter((e) => e.length > 0 && e.includes("@")),
-  );
+  ]).then(([to, cc, bcc]) => [...to, ...cc, ...bcc]);
 }
 
 function getRecipients(field: Office.Recipients): Promise<RecipientInfo[]> {
@@ -422,6 +413,7 @@ function getRecipients(field: Office.Recipients): Promise<RecipientInfo[]> {
           value.map((r) => ({
             emailAddress: r.emailAddress ?? "",
             displayName: r.displayName ?? "",
+            recipientType: (r as Office.EmailAddressDetails).recipientType ?? "",
           })),
         );
       } else {

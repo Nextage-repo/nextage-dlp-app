@@ -182,6 +182,7 @@ export function email(p: Partial<EmailData> = {}): EmailData {
     cc: p.cc ?? [],
     bcc: p.bcc ?? [],
     recipients: p.recipients ?? [],
+    groupRecipients: p.groupRecipients ?? [],
     attachments: p.attachments ?? [],
   };
 }

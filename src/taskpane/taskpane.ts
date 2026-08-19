@@ -5,6 +5,7 @@ import { AuditService } from "../services/audit.service";
 import { authService } from "../services/auth.service";
 import { ConfigService } from "../services/config.service";
 import { SAFE_MODE } from "../shared/constants";
+import { splitRecipients } from "../shared/recipients";
 import { DLPValidator } from "../validators/validators";
 import { readAttachmentsWithHeaders } from "../commands/attachment-reader";
 
@@ -101,8 +102,10 @@ async function runChecks(): Promise<void> {
 
     const emailData = await getEmailData();
 
-    // Empty recipients guard
-    if (emailData.recipients.length === 0) {
+    // Empty recipients guard. A mail addressed only to internal distribution groups
+    // has no SMTP addresses but does have recipients — the validator reports it as
+    // internal, so let it through rather than claiming there are no recipients.
+    if (emailData.recipients.length === 0 && (emailData.groupRecipients?.length ?? 0) === 0) {
       showStatus(
         "⚠️ אין נמענים. אם הקלדת כתובת – לחץ Tab או Enter כדי לאשר.",
         "warning",
@@ -245,12 +248,18 @@ async function getEmailData(): Promise<EmailData> {
     readAttachmentsWithHeaders(item),
   ]);
 
-  const all = [...to, ...cc, ...bcc]
-    .map((r) => r.emailAddress.toLowerCase().trim())
-    .filter((e) => e.length > 0 && e.includes("@"));
-  const unique = Array.from(new Set(all));
+  const split = splitRecipients([...to, ...cc, ...bcc]);
 
-  return { subject, userEmail, to, cc, bcc, recipients: unique, attachments };
+  return {
+    subject,
+    userEmail,
+    to,
+    cc,
+    bcc,
+    recipients: split.addresses,
+    groupRecipients: split.groups,
+    attachments,
+  };
 }
 
 function getSubject(item: Office.MessageCompose): Promise<string> {
@@ -269,6 +278,7 @@ function getRecipients(field: Office.Recipients): Promise<RecipientInfo[]> {
           (result.value ?? []).map((r) => ({
             emailAddress: r.emailAddress ?? "",
             displayName: r.displayName ?? "",
+            recipientType: (r as Office.EmailAddressDetails).recipientType ?? "",
           })),
         );
       } else {

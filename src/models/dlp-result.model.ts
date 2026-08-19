@@ -36,6 +36,9 @@ export interface AttachmentWithHeader {
 export interface RecipientInfo {
   emailAddress: string;
   displayName: string;
+  // Office.js EmailAddressDetails.recipientType — "distributionList" | "internal"
+  // | "external" | "other". Optional so older callers/tests keep working.
+  recipientType?: string;
 }
 
 export interface EmailData {
@@ -46,4 +49,8 @@ export interface EmailData {
   bcc: RecipientInfo[];
   recipients: string[]; // unique emailAddresses, lowercased
   attachments: AttachmentWithHeader[];
+  // Internal distribution groups on this mail. They carry no SMTP address, so they
+  // never appear in `recipients` — kept here so "addressed only to a group" is not
+  // mistaken for "no recipients at all". See shared/recipients.ts.
+  groupRecipients?: RecipientInfo[];
 }

@@ -32,6 +32,24 @@ export class DLPValidator {
   ) {}
 
   async runAllChecks(email: EmailData): Promise<DLPResult> {
+    // Addressed only to internal distribution groups. Those carry no SMTP address,
+    // so `recipients` is empty even though the mail has recipients — treat it as the
+    // internal mail it is instead of reporting "no recipients" three times.
+    if (email.recipients.length === 0 && (email.groupRecipients?.length ?? 0) > 0) {
+      const internal: CheckResult = {
+        check: 1,
+        isValid: true,
+        severity: "INFO",
+        message: "קבוצת תפוצה פנימית — לא נדרשות בדיקות DLP",
+      };
+      return {
+        results: [internal, { ...internal, check: 2 }, { ...internal, check: 3 }],
+        hasBlock: false,
+        hasWarning: false,
+        shouldBlock: false,
+      };
+    }
+
     // Empty recipients guard (Outlook returns [] when user hasn't pressed Tab)
     if (email.recipients.length === 0) {
       const empty: CheckResult = {
